@@ -52,7 +52,7 @@ export default function Opportunities() {
       try {
         setLoading(true);
         setError(null);
-        const data = await fetchOpportunities(200); // Fetch up to 200 opportunities
+        const data = await fetchOpportunities(1000); // Fetch up to 1000 opportunities across all sources
         setOpportunities(data);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load opportunities');

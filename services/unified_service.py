@@ -9,7 +9,7 @@ from services.ai_content_filter import filter_content_with_ai
 
 # Configuration for AI filtering
 # Set ENABLE_AI_FILTERING=false to disable AI filtering (uses keyword filtering only)
-ENABLE_AI_FILTERING = os.getenv("ENABLE_AI_FILTERING", "true").lower() == "true"
+ENABLE_AI_FILTERING = os.getenv("ENABLE_AI_FILTERING", "false").lower() == "true"
 AI_FILTER_MODEL = os.getenv("AI_FILTER_MODEL", None)  # None = use default model
 AI_FILTER_BATCH_SIZE = int(os.getenv("AI_FILTER_BATCH_SIZE", "1"))  # 1 at a time for free-tier pacing
 

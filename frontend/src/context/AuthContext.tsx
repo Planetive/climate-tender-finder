@@ -1,12 +1,12 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from "react";
 
-// User type - all users are members (no admin role)
+// Dummy auth — open access, no real signup/login required
 interface User {
   id: string;
   email: string;
   full_name: string;
   avatar_url?: string;
-  role: "member"; // All users are members
+  role: "member";
 }
 
 interface AuthContextType {
@@ -20,20 +20,11 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// Mock users storage - all users are members
-// In production, this would be stored in a database
-const STORAGE_KEY = "funding_tracker_users";
-const getStoredUsers = (): User[] => {
-  try {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    return stored ? JSON.parse(stored) : [];
-  } catch {
-    return [];
-  }
-};
-
-const saveUsers = (users: User[]) => {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(users));
+const GUEST_USER: User = {
+  id: "guest",
+  email: "guest@planetive.local",
+  full_name: "Guest User",
+  role: "member",
 };
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -41,73 +32,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    // Check for existing session in localStorage
-    const storedUser = localStorage.getItem("auth_user");
-    if (storedUser) {
-      setUser(JSON.parse(storedUser));
-    }
+    // Always signed in as guest — no login wall
+    setUser(GUEST_USER);
     setIsLoading(false);
   }, []);
 
-  const login = async (email: string, password: string): Promise<{ error: string | null }> => {
-    // Simple login - check if user exists and password is valid
-    const users = getStoredUsers();
-    const foundUser = users.find((u) => u.email === email);
-    
-    if (!foundUser) {
-      return { error: "Invalid email or password" };
-    }
-    
-    // In a real app, you'd verify the password hash here
-    // For now, we just check password length (password is stored in localStorage for demo)
-    const userPassword = localStorage.getItem(`user_password_${email}`);
-    if (password.length < 6 || (userPassword && password !== userPassword)) {
-      return { error: "Invalid email or password" };
-    }
-    
-    setUser(foundUser);
-    localStorage.setItem("auth_user", JSON.stringify(foundUser));
+  const login = async (_email: string, _password: string) => {
+    setUser(GUEST_USER);
     return { error: null };
   };
 
-  const signup = async (email: string, password: string, fullName: string): Promise<{ error: string | null }> => {
-    // Validate input
-    if (password.length < 6) {
-      return { error: "Password must be at least 6 characters" };
-    }
-    
-    if (!fullName.trim()) {
-      return { error: "Please enter your full name" };
-    }
-    
-    // Check if user already exists
-    const users = getStoredUsers();
-    if (users.find((u) => u.email === email)) {
-      return { error: "User with this email already exists" };
-    }
-    
-    // Create new user (all users are members)
-    const newUser: User = {
-      id: `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      email,
-      full_name: fullName.trim(),
-      role: "member", // All users are members
-    };
-    
-    // Save user and password
-    users.push(newUser);
-    saveUsers(users);
-    localStorage.setItem(`user_password_${email}`, password); // In production, hash this!
-    
-    // Auto-login after signup
-    setUser(newUser);
-    localStorage.setItem("auth_user", JSON.stringify(newUser));
+  const signup = async (_email: string, _password: string, _fullName: string) => {
+    setUser(GUEST_USER);
     return { error: null };
   };
 
   const logout = () => {
-    setUser(null);
-    localStorage.removeItem("auth_user");
+    // Stay as guest — app is open access
+    setUser(GUEST_USER);
   };
 
   return (
@@ -115,7 +57,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       value={{
         user,
         isLoading,
-        isAuthenticated: !!user,
+        isAuthenticated: true,
         login,
         signup,
         logout,

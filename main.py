@@ -24,10 +24,13 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# CORS middleware
+# CORS: set CORS_ORIGINS=https://your-app.vercel.app,http://localhost:8080
+_cors_raw = os.getenv("CORS_ORIGINS", "*").strip()
+_cors_origins = [o.strip() for o in _cors_raw.split(",") if o.strip()] or ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify your frontend URL
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -45,7 +48,7 @@ async def health_check():
 
 @app.get("/api/feeds")
 async def get_feeds(
-    limit: int = Query(50, ge=1, le=200, description="Number of items to return"),
+    limit: int = Query(200, ge=1, le=2000, description="Number of items to return"),
     offset: int = Query(0, ge=0, description="Number of items to skip"),
     refresh: bool = Query(False, description="Force refresh cache (ignore cached data)")
 ):
@@ -160,18 +163,18 @@ async def clear_cache_endpoint():
 
 
 if __name__ == "__main__":
+    port = int(os.getenv("PORT", "3001"))
     print(f"🚀 Starting News Tracker API server...")
     rss_count = len([f for f in config['feeds'] if f.get('type', 'rss') == 'rss'])
     scrape_count = len([f for f in config['feeds'] if f.get('type') == 'scrape'])
     print(f"📡 Monitoring {rss_count} RSS feed sources and {scrape_count} scraping sources")
-    print(f"⏳ Initializing server (this may take a moment on first run)...")
+    print(f"🌐 CORS origins: {_cors_origins}")
+    print(f"⏳ Initializing server on 0.0.0.0:{port}...")
     
-    # Configure uvicorn to use the event loop policy we set
-    # Note: First request to scraping endpoint may be slow as Crawl4AI initializes Playwright
     uvicorn.run(
-        app,  # Pass app directly instead of string (faster startup)
+        app,
         host="0.0.0.0",
-        port=3001,
-        reload=False,  # Disable reload for faster startup (use --reload flag if needed)
-        loop="asyncio"  # Use asyncio loop (will use our policy)
+        port=port,
+        reload=False,
+        loop="asyncio"
     )

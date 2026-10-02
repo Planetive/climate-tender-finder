@@ -353,7 +353,7 @@ const FRONTEND_CACHE_TTL = 2 * 60 * 1000; // 2 minutes in milliseconds
  * Fetch all opportunities from the backend
  * Uses frontend caching to avoid unnecessary API calls
  */
-export async function fetchOpportunities(limit: number = 50, offset: number = 0, forceRefresh: boolean = false): Promise<Opportunity[]> {
+export async function fetchOpportunities(limit: number = 500, offset: number = 0, forceRefresh: boolean = false): Promise<Opportunity[]> {
   try {
     // Check frontend cache first (unless force refresh)
     if (!forceRefresh && cachedOpportunities) {
@@ -365,8 +365,8 @@ export async function fetchOpportunities(limit: number = 50, offset: number = 0,
       }
     }
     
-    // Fetch a larger batch to populate cache (backend has its own cache)
-    const fetchLimit = Math.max(limit, 200); // Fetch at least 200 to populate cache
+    // Fetch a large batch so all sources are included (backend max 2000)
+    const fetchLimit = Math.min(Math.max(limit, 500), 2000);
     const response = await fetch(`${API_BASE_URL}/feeds?limit=${fetchLimit}&offset=0&refresh=${forceRefresh}`);
     
     if (!response.ok) {

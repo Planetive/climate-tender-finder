@@ -38,7 +38,7 @@ export default function OpportunityDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { toast } = useToast();
-  const { user, isAuthenticated } = useAuth();
+  const { user } = useAuth();
   const alertsContext = useAlerts();
   
   const [isInterested, setIsInterested] = useState(false);
@@ -90,16 +90,6 @@ export default function OpportunityDetail() {
   }, [id]);
 
   const handleMarkInterested = () => {
-    if (!isAuthenticated) {
-      toast({
-        variant: "destructive",
-        title: "Login required",
-        description: "Please sign in to mark opportunities as interested.",
-      });
-      navigate("/auth");
-      return;
-    }
-    
     setIsInterested(!isInterested);
     toast({
       title: isInterested ? "Removed from interests" : "Marked as interested",
@@ -110,15 +100,6 @@ export default function OpportunityDetail() {
   };
 
   const handleAssignOwner = () => {
-    if (!isAuthenticated) {
-      toast({
-        variant: "destructive",
-        title: "Login required",
-        description: "Please sign in to assign owners.",
-      });
-      navigate("/auth");
-      return;
-    }
     setIsAssignDialogOpen(true);
   };
 

@@ -1,4 +1,4 @@
-import { LogOut, Settings, User } from "lucide-react";
+import { Settings, User } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -13,7 +13,7 @@ import {
 import { useAuth } from "@/context/AuthContext";
 
 export function UserMenu() {
-  const { user, logout, isAuthenticated } = useAuth();
+  const { user } = useAuth();
   const navigate = useNavigate();
 
   const getInitials = (name: string) => {
@@ -25,18 +25,7 @@ export function UserMenu() {
       .slice(0, 2);
   };
 
-  if (!isAuthenticated || !user) {
-    return (
-      <Button variant="outline" size="sm" onClick={() => navigate("/auth")}>
-        Sign In
-      </Button>
-    );
-  }
-
-  const handleLogout = () => {
-    logout();
-    navigate("/auth");
-  };
+  if (!user) return null;
 
   return (
     <DropdownMenu>
@@ -65,11 +54,6 @@ export function UserMenu() {
         <DropdownMenuItem>
           <Settings className="mr-2 h-4 w-4" />
           Settings
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem onClick={handleLogout} className="text-destructive focus:text-destructive">
-          <LogOut className="mr-2 h-4 w-4" />
-          Log out
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
