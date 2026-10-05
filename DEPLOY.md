@@ -1,19 +1,34 @@
-# Deploy: Vercel (frontend) + AWS EC2 (backend)
+# Deploy guide
 
 This repo is a **monorepo**:
-- **Backend** = repo root (`main.py`, `services/`, `Dockerfile`)
+- **Backend (`app`)** = repo root (`main.py`, `services/`, `Dockerfile`)
 - **Frontend** = `frontend/` (Vite + React)
 
 ---
 
-## 1) Backend on AWS EC2 (Docker)
+## Option A — Everything on Vercel (multi-service)
 
-### Prerequisites
-- EC2 with Docker installed
-- Security Group: open **TCP 3001** (or 80/443 if you put nginx in front)
-- Optional: domain pointing to the EC2 public IP
+Root `vercel.json` defines two services: `app` (FastAPI) and `frontend` (Vite).
 
-### Build & run
+1. Import `Planetive/climate-tender-finder` on Vercel
+2. **Do not** set Root Directory to `frontend` — leave it at the **repo root** so `vercel.json` is used
+3. Env vars on the project (optional):
+   - `ENABLE_AI_FILTERING=false`
+   - `GEMINI_API_KEY=` (only if AI filter is on)
+   - Leave `VITE_API_URL` **unset** so the UI calls same-origin `/api`
+4. Deploy
+
+Routing:
+- `/api/*` → FastAPI (`app`)
+- everything else → Vite SPA (`frontend`)
+
+**Limits to know:** Vercel Functions have a max duration (set to 300s here). Full scrapes (Playwright / SECP) can be slow or fail on the Python runtime because Chromium is heavy. If scrapers break on Vercel, use Option B for the backend.
+
+---
+
+## Option B — Vercel frontend + AWS EC2 backend (Docker)
+
+### Backend on EC2
 ```bash
 git clone https://github.com/Planetive/climate-tender-finder.git
 cd climate-tender-finder
@@ -31,79 +46,33 @@ docker run -d --name climate-tender-api \
   climate-tender-api
 ```
 
-Check health:
+Health checks:
 ```bash
 curl http://YOUR_EC2_IP:3001/api/health
 curl "http://YOUR_EC2_IP:3001/api/sources"
 ```
 
-First `/api/feeds?refresh=true` can take several minutes (RSS + scrapers including Playwright for SECP).
+### Frontend on Vercel (frontend-only)
+1. Root Directory = `frontend`
+2. Set `VITE_API_URL=https://YOUR_API_HOST/api` (must include `/api`)
+3. Deploy
 
-### Without Docker (bare metal)
+Browsers block `https://vercel.app` → `http://EC2` (mixed content). Prefer HTTPS on the API (nginx + Let’s Encrypt, Cloudflare Tunnel, or ALB).
+
+---
+
+## CORS
+
+Backend reads `CORS_ORIGINS` (comma-separated). Same-origin Option A usually needs no special CORS. For Option B:
 ```bash
-sudo apt update && sudo apt install -y python3.13 python3.13-venv
-python3.13 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-playwright install chromium
-playwright install-deps chromium
-export ENABLE_AI_FILTERING=false
-export CORS_ORIGINS=https://YOUR-APP.vercel.app
-python main.py
+-e CORS_ORIGINS=https://your-app.vercel.app,http://localhost:8080
 ```
 
 ---
 
-## 2) Frontend on Vercel
+## Checklist
 
-1. Import repo: `Planetive/climate-tender-finder`
-2. **Root Directory** = `frontend`  ← required
-3. Framework: Vite (auto)
-4. Build: `npm run build` / Output: `dist`
-5. Environment variables:
-
-| Name | Value |
-|------|--------|
-| `VITE_API_URL` | `http://YOUR_EC2_IP:3001/api` **or** `https://api.yourdomain.com/api` |
-| `VITE_SUPABASE_URL` | optional (from `frontend/.env.example`) |
-| `VITE_SUPABASE_PUBLISHABLE_KEY` | optional |
-| `VITE_SUPABASE_PROJECT_ID` | optional |
-
-6. Deploy
-
-**Important:** `VITE_*` vars are baked in at **build time**. After changing `VITE_API_URL`, redeploy Vercel.
-
-### HTTPS tip
-Browsers block `https://vercel.app` → `http://EC2` (mixed content). Prefer:
-- nginx + Let’s Encrypt on EC2 → `https://api.yourdomain.com`
-- or Cloudflare Tunnel / ALB with TLS
-
----
-
-## 3) CORS
-
-Backend reads `CORS_ORIGINS` (comma-separated). Example:
-```bash
--e CORS_ORIGINS=https://climate-tender-finder.vercel.app,http://localhost:8080
-```
-Default is `*` (fine for early testing).
-
----
-
-## 4) What gets fetched
-
-All sources in `config/feeds.py` are active (10 RSS + 5 scrapers including UNDP Pakistan & SECP).
-
-`ENABLE_AI_FILTERING=false` (default in Docker) returns everything after keyword filters — no Gemini drop. Set `true` + `GEMINI_API_KEY` only if you want stricter climate filtering.
-
-Auth is open (guest mode) — no login wall on Vercel.
-
----
-
-## 5) Quick checklist
-
-- [ ] EC2 `/api/health` returns ok
-- [ ] EC2 `/api/sources` shows ~15 sources
-- [ ] Vercel Root Directory = `frontend`
-- [ ] `VITE_API_URL` points to EC2 `/api`
-- [ ] CORS includes your Vercel URL
-- [ ] Prefer HTTPS API if frontend is HTTPS
+- [ ] `/api/health` returns ok
+- [ ] `/api/sources` lists sources
+- [ ] UI loads opportunities without CORS / mixed-content errors
+- [ ] If using AI filter: `GEMINI_API_KEY` set and `ENABLE_AI_FILTERING=true`

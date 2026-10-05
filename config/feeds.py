@@ -10,7 +10,7 @@ config = {
             "id": "adb-blogs",
             "name": "Asian Development Bank - Blogs",
             "type": "rss",
-            "url": "https://www.adb.org/rss/blogs",
+            "url": "https://feeds.feedburner.com/adb_blogs",
             "description": "Asian Development Bank blog posts on development in Asia and the Pacific, covering climate, sustainability, energy, and regional development",
             "keywords": ["asia", "pacific", "development", "adb"]
         },
@@ -18,17 +18,33 @@ config = {
             "id": "adb-news",
             "name": "ADB - News",
             "type": "rss",
-            "url": "https://www.adb.org/rss/news",
+            "url": "https://feeds.feedburner.com/adb_news",
             "description": "Asian Development Bank news releases on funding, projects, and initiatives related to climate, sustainability, energy, and development in Asia and the Pacific",
             "keywords": ["asia", "pacific", "development", "adb", "news", "funding", "grants"]
         },
         {
-            "id": "adb-procurement",
-            "name": "ADB - Procurement Notices",
+            "id": "adb-invitation-for-bids",
+            "name": "ADB - Invitation for Bids",
             "type": "rss",
-            "url": "https://www.adb.org/rss/procurement-notices",
-            "description": "Asian Development Bank procurement notices, tenders, RFPs, and bidding opportunities for projects related to climate, sustainability, energy, and infrastructure development",
-            "keywords": ["asia", "pacific", "development", "adb", "procurement", "tender", "rfp", "bid", "contract", "icb", "ncb"]
+            "url": "https://feeds.feedburner.com/adb-invitation-for-bids",
+            "description": "Active ADB invitation-for-bids / tender notices (works, goods, and related procurement) with project, country, sector, and status metadata",
+            "keywords": ["asia", "pacific", "adb", "tender", "invitation for bids", "procurement", "bid", "icb", "ncb", "energy", "climate", "water", "infrastructure"]
+        },
+        {
+            "id": "adb-advanced-notices",
+            "name": "ADB - Advance Contracting Notices",
+            "type": "rss",
+            "url": "https://feeds.feedburner.com/adb-advanced-notices",
+            "description": "ADB advance contracting and early market engagement notices for upcoming projects and procurements",
+            "keywords": ["asia", "pacific", "adb", "advance notice", "early market engagement", "procurement", "tender", "contracting"]
+        },
+        {
+            "id": "adb-csrn",
+            "name": "ADB - Consulting Services Recruitment Notices",
+            "type": "rss",
+            "url": "https://feeds.feedburner.com/adb-csrn",
+            "description": "ADB consulting services recruitment notices (CSRN) for individual consultants and firms on ADB-financed projects",
+            "keywords": ["asia", "pacific", "adb", "csrn", "consultant", "consulting", "recruitment", "procurement", "energy", "climate", "environment"]
         },
         {
             "id": "worldbank-news",

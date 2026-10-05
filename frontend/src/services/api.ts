@@ -5,8 +5,14 @@
  * It transforms backend data into the format expected by the frontend components.
  */
 
-// Base URL for the backend API
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
+// Base URL for the backend API.
+// - Local Vite (`npm run dev`): talk to FastAPI on port 3001
+// - Vercel production: same-origin `/api` (routed to the `app` service)
+// - Optional override: set VITE_API_URL (e.g. AWS EC2) at build time
+const API_BASE_URL =
+  import.meta.env.VITE_API_URL ||
+  (import.meta.env.PROD ? '/api' : 'http://localhost:3001/api');
+
 
 /**
  * Backend API response types

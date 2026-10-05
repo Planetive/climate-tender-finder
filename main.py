@@ -25,13 +25,16 @@ app = FastAPI(
 )
 
 # CORS: set CORS_ORIGINS=https://your-app.vercel.app,http://localhost:8080
+# Note: browsers forbid Access-Control-Allow-Origin: * when credentials are on.
+# So if origins is "*", we disable credentials (fine for this public API).
 _cors_raw = os.getenv("CORS_ORIGINS", "*").strip()
 _cors_origins = [o.strip() for o in _cors_raw.split(",") if o.strip()] or ["*"]
+_cors_credentials = "*" not in _cors_origins
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
-    allow_credentials=True,
+    allow_credentials=_cors_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
