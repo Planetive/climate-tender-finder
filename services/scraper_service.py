@@ -1084,6 +1084,244 @@ async def scrape_secp_notifications_with_retry(url_config: Dict[str, Any]) -> Li
     return notifications
 
 
+def parse_gcf_datetime(value: str) -> Optional[datetime]:
+    """Parse GCF Oracle dates like '10/9/26 6:00 PM' or '9/22/26 4:24 PM'."""
+    if not value:
+        return None
+    value = re.sub(r"\s+", " ", str(value)).strip()
+    for fmt in ("%m/%d/%y %I:%M %p", "%m/%d/%Y %I:%M %p", "%m/%d/%y", "%m/%d/%Y"):
+        try:
+            return datetime.strptime(value, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def extract_gcf_negotiations(html: str, url_config: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Extract GCF Negotiation Abstracts rows from Oracle ADF HTML.
+
+    Expected columns (order may vary; we map by header text):
+    Negotiation | Title | Negotiation Type | Status | Posting Date | Open Date | Close Date | Details
+
+    Keeps only Status == Active with Close Date on/after today.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    items: List[Dict[str, Any]] = []
+    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    seen: set = set()
+
+    # Prefer tables that look like the negotiations grid
+    tables = soup.find_all("table")
+    target_rows = []
+
+    for table in tables:
+        header_cells = []
+        thead = table.find("thead")
+        if thead:
+            header_cells = thead.find_all(["th", "td"])
+        if not header_cells:
+            first_tr = table.find("tr")
+            if first_tr:
+                header_cells = first_tr.find_all(["th", "td"])
+        headers = [c.get_text(" ", strip=True).lower() for c in header_cells]
+        if not headers:
+            continue
+        if not (any("negotiation" in h for h in headers) and any("title" in h for h in headers)):
+            continue
+        if not any("status" in h or "close" in h for h in headers):
+            # still accept if we see RFx pattern in body later
+            pass
+
+        # Map header index
+        col = {}
+        for i, h in enumerate(headers):
+            if "negotiation" == h or h.startswith("negotiation") and "type" not in h:
+                col.setdefault("negotiation", i)
+            elif "title" in h:
+                col.setdefault("title", i)
+            elif "type" in h:
+                col.setdefault("type", i)
+            elif "status" in h:
+                col.setdefault("status", i)
+            elif "posting" in h:
+                col.setdefault("posted", i)
+            elif h.startswith("open") or "open date" in h:
+                col.setdefault("open", i)
+            elif "close" in h:
+                col.setdefault("close", i)
+
+        tbody = table.find("tbody") or table
+        for tr in tbody.find_all("tr"):
+            cells = tr.find_all("td")
+            if len(cells) < 3:
+                continue
+            texts = [c.get_text(" ", strip=True) for c in cells]
+            # Skip pure header repeats
+            joined = " ".join(texts).lower()
+            if "negotiation type" in joined and "close date" in joined:
+                continue
+
+            def cell(key, default_idx=None):
+                idx = col.get(key, default_idx)
+                if idx is None or idx >= len(texts):
+                    return ""
+                return texts[idx]
+
+            # Fallback positional layout from live page:
+            # 0 Negotiation, 1 Title, 2 Type, 3 Status, 4 Posting, 5 Open, 6 Close
+            negotiation = cell("negotiation", 0)
+            title = cell("title", 1)
+            neg_type = cell("type", 2)
+            status = cell("status", 3)
+            posted = cell("posted", 4)
+            open_date = cell("open", 5)
+            close_date = cell("close", 6)
+
+            if not title or len(title) < 5:
+                continue
+            # Negotiation ids look like RFx202600043
+            if negotiation and not re.search(r"RFx?\d|RFQ|RFP|RFI", negotiation, re.I):
+                # maybe columns shifted — try find RFx in row
+                for t in texts:
+                    if re.match(r"RFx?\d", t, re.I):
+                        negotiation = t
+                        break
+
+            status_l = status.lower().strip()
+            if status_l and status_l != "active":
+                continue
+
+            close_dt = parse_gcf_datetime(close_date)
+            if close_dt is None:
+                # No usable deadline — skip (do not guess)
+                continue
+            if close_dt.replace(hour=0, minute=0, second=0, microsecond=0) < today:
+                continue
+
+            key = f"{negotiation}|{title}|{close_date}"
+            if key in seen:
+                continue
+            seen.add(key)
+
+            # Detail link if present
+            link = url_config["url"]
+            for a in tr.find_all("a", href=True):
+                href = a.get("href", "").strip()
+                if href and href not in ("#",) and "javascript:" not in href.lower():
+                    if href.startswith("http"):
+                        link = href
+                    elif href.startswith("/"):
+                        link = "https://iaayou.fa.ocs.oraclecloud.com" + href
+                    break
+
+            pub_iso = (parse_gcf_datetime(posted) or close_dt).isoformat()
+            deadline_iso = close_dt.strftime("%Y-%m-%d")
+
+            items.append({
+                "id": generate_item_id(link + negotiation, title, pub_iso),
+                "title": f"{negotiation}: {title}" if negotiation else title,
+                "link": link,
+                "description": f"{neg_type} | Status: {status} | Close: {close_date}",
+                "content": "",
+                "pubDate": pub_iso,
+                "author": url_config.get("name", "Green Climate Fund"),
+                "categories": [c for c in [neg_type, status, "GCF", "procurement"] if c],
+                "source": {
+                    "id": url_config["id"],
+                    "name": url_config["name"],
+                    "url": url_config["url"],
+                },
+                "image": None,
+                "deadline": deadline_iso,
+                "deadline_display": close_date,
+                "reference_number": negotiation or None,
+                "opportunity_type": neg_type or status or None,
+                "posted": posted or None,
+                "country": "Global",
+                "location": "Global",
+            })
+
+    print(f"  GCF negotiations: extracted {len(items)} active open items")
+    return items
+
+
+async def scrape_gcf_negotiations_with_scroll(url_config: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Scrape GCF Oracle ADF Negotiation Abstracts with scroll-to-load-more.
+
+    Use a stable URL (prcBuId only). Session tokens in shared links expire.
+    """
+    # Strip volatile ADF session params if someone pasted a full browser URL
+    raw_url = url_config.get("url", "")
+    if "NegotiationAbstracts" in raw_url and "prcBuId=" in raw_url:
+        m = re.search(r"(https?://[^?]+\?prcBuId=\d+)", raw_url)
+        url = m.group(1) if m else raw_url.split("&_afrLoop")[0]
+    else:
+        url = raw_url
+
+    print("  Detected GCF Negotiation Abstracts — browser scroll scrape...")
+    print(f"  URL: {url}")
+
+    browser_cfg = BrowserConfig(
+        headless=True,
+        viewport_width=1400,
+        viewport_height=900,
+        user_agent=(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        ),
+    )
+
+    virtual_scroll_config = VirtualScrollConfig(
+        container_selector="body",
+        scroll_count=25,
+        scroll_by="page_height",
+        wait_after_scroll=1.5,
+    )
+
+    run_cfg = CrawlerRunConfig(
+        word_count_threshold=5,
+        remove_overlay_elements=True,
+        screenshot=False,
+        wait_for_images=False,
+        cache_mode=CacheMode.BYPASS,
+        page_timeout=180000,
+        wait_until="domcontentloaded",
+        delay_before_return_html=5.0,
+        virtual_scroll_config=virtual_scroll_config,
+        scan_full_page=True,
+    )
+
+    try:
+        async with AsyncWebCrawler(config=browser_cfg, verbose=False) as crawler:
+            result = await crawler.arun(url=url, config=run_cfg)
+            if not result.success:
+                print(f"✗ GCF crawl failed: {result.error_message}")
+                return []
+            html_content = result.html or ""
+            print(f"  HTML length after scroll: {len(html_content)}")
+    except Exception as e:
+        print(f"✗ GCF crawl exception: {e}")
+        return []
+
+    if not html_content or len(html_content) < 1000:
+        print("⚠ GCF page HTML too small / empty")
+        return []
+
+    # Soft check we got negotiation content
+    if "RFx" not in html_content and "Negotiation" not in html_content:
+        print("⚠ GCF HTML missing expected negotiation markers")
+
+    items = extract_gcf_negotiations(html_content, url_config)
+    if items:
+        print(f"✓ {url_config['name']}: Found {len(items)} active open negotiations")
+    else:
+        print(f"⚠ {url_config['name']}: No active open negotiations found")
+    return items
+
+
 def parse_undp_deadline_date(value: str) -> Optional[datetime]:
     """Parse UNDP deadline/posted datetime strings to datetime (date portion)."""
     if not value:
@@ -1432,6 +1670,12 @@ async def scrape_single_url(url_config: Dict[str, Any]) -> List[Dict[str, Any]]:
         # SECP — Cloudflare-protected; dedicated retry/cooldown strategy
         if "secp.gov.pk" in url.lower():
             return await scrape_secp_notifications_with_retry(url_config)
+
+        # GCF Oracle ADF negotiations — scroll to load more; filter Active + open deadline
+        if "oraclecloud.com" in url.lower() and "negotiationabstracts" in url.lower():
+            return await scrape_gcf_negotiations_with_scroll(url_config)
+        if url_config.get("id") == "gcf-negotiations":
+            return await scrape_gcf_negotiations_with_scroll(url_config)
 
         html_content = None
 

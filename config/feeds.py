@@ -140,6 +140,16 @@ config = {
             "skip_ai_filter": True
         },
         {
+            "id": "gcf-negotiations",
+            "name": "Green Climate Fund - Procurement Negotiations",
+            "type": "scrape",
+            "url": "https://iaayou.fa.ocs.oraclecloud.com/fscmUI/faces/NegotiationAbstracts?prcBuId=300000003621906",
+            "description": "GCF public procurement / negotiation abstracts (RFP, RFQ). Uses browser scroll to load all rows. Keeps only Status=Active with Close Date today or later.",
+            "keywords": [],
+            "skip_ai_filter": True,
+            "skip_keyword_filter": True
+        },
+        {
             "id": "secp-notifications",
             "name": "SECP - Laws & Notifications",
             "type": "scrape",
