@@ -312,6 +312,8 @@ def extract_paktender_table(html: str, url_config: Dict[str, Any]) -> List[Dict[
                         "status": status,
                         "attachments": attachments,  # List of PDF attachments
                         "opportunity_type": "Tender",  # All items from paktender are tenders
+                        "country": "Pakistan",
+                        "location": "Pakistan",
                     }
                     
                     items.append(item)
@@ -704,139 +706,168 @@ def extract_ungm_notices(html: str, url_config: Dict[str, Any]) -> List[Dict[str
     return items
 
 
+async def scrape_paktender_pages(url_config: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Fetch PakTender listing with plain HTTP (no browser).
+
+    Why: the HTML table is server-rendered; Crawl4AI adds cost/fragility.
+    Parses pages 1–2 and keeps tenders whose deadline is today or later when parseable.
+    """
+    url = url_config["url"]
+    print(f"  Detected PakTender — httpx table scrape: {url}")
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml",
+    }
+    all_items: List[Dict[str, Any]] = []
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    async with httpx.AsyncClient(follow_redirects=True, timeout=45.0, headers=headers) as client:
+        for page in (1, 2):
+            page_url = url if page == 1 else (f"{url}&page={page}" if "?" in url else f"{url}?page={page}")
+            try:
+                response = await client.get(page_url)
+                response.raise_for_status()
+                page_items = extract_paktender_table(response.text, url_config)
+                print(f"  Page {page}: extracted {len(page_items)} rows")
+                all_items.extend(page_items)
+            except Exception as e:
+                print(f"  ⚠ Page {page} failed: {e}")
+
+    # Dedupe by id / link
+    seen = set()
+    unique = []
+    for item in all_items:
+        key = item.get("id") or item.get("link")
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+
+    # Prefer open deadlines when we have a parseable deadline
+    open_items = []
+    for item in unique:
+        deadline = (item.get("deadline") or "")[:10]
+        if deadline and len(deadline) == 10 and deadline < today:
+            continue
+        open_items.append(item)
+
+    print(f"✓ {url_config['name']}: {len(open_items)} open tenders (from {len(unique)} unique rows)")
+    return open_items
+
+
 async def scrape_ungm_with_scroll(url_config: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
-    Scrape UNGM.org with infinite scroll support using Crawl4AI's VirtualScrollConfig
-    
-    Args:
-        url_config: Configuration for this source
-        
-    Returns:
-        List of opportunity items
+    Scrape UNGM.org notices with browser scroll (JS-rendered role=table).
+
+    skip_keyword_filter / skip_ai_filter: keep all open notices (portal is already procurement).
+    Expired deadlines are dropped when parseable.
     """
-    url = url_config['url']
-    keywords = url_config.get('keywords', [])
-    scraped_items = []
-    
-    print(f"  Scraping UNGM with virtual scroll support...")
-    
-    # Configure virtual scroll for UNGM table
-    # UNGM uses a table that loads more rows as you scroll
-    # The table is typically in the main content area
-    # Based on UNGM structure, we need to scroll the page body or main content area
-    # The table itself might be in a scrollable container
-    virtual_scroll_config = VirtualScrollConfig(
-        container_selector="body, main, #main-content, .content, table, tbody",  # Try body first, then main content areas
-        scroll_count=30,  # Increase scroll count to load more items (UNGM has 976+ opportunities)
-        scroll_by="page_height",  # Scroll by full page height to ensure we capture all items
-        wait_after_scroll=2.0  # Wait 2 seconds after each scroll for content to load (UNGM can be slow)
+    url = url_config["url"]
+    keywords = url_config.get("keywords", [])
+    skip_keyword = url_config.get("skip_keyword_filter") or url_config.get("skip_ai_filter")
+    scraped_items: List[Dict[str, Any]] = []
+
+    print("  Detected UNGM — browser scroll scrape...")
+    print(f"  URL: {url}")
+
+    browser_cfg = BrowserConfig(
+        headless=True,
+        viewport_width=1400,
+        viewport_height=900,
+        user_agent=(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        ),
     )
-    
+
+    # UNGM renders notices in div[role=table]#tblNotices after JS loads
+    virtual_scroll_config = VirtualScrollConfig(
+        container_selector="body, #tblNotices, [role='table']",
+        scroll_count=20,
+        scroll_by="page_height",
+        wait_after_scroll=2.0,
+    )
+
     crawler_config = CrawlerRunConfig(
         word_count_threshold=10,
         remove_overlay_elements=True,
         screenshot=False,
         wait_for_images=False,
         cache_mode=CacheMode.BYPASS,
-        virtual_scroll_config=virtual_scroll_config,  # Use Crawl4AI's built-in virtual scroll
-        scan_full_page=True  # Also scan full page for appended content (traditional infinite scroll)
+        virtual_scroll_config=virtual_scroll_config,
+        scan_full_page=True,
+        page_timeout=180000,
+        wait_until="domcontentloaded",
+        delay_before_return_html=4.0,
     )
-    
+
     try:
-        async with AsyncWebCrawler(verbose=False) as crawler:
-            print(f"  Loading UNGM page with virtual scroll...")
-            print(f"  Waiting for page to load and table to render...")
-            
-            # First, load the page and wait for table to appear
-            result = await crawler.arun(
-                url=url,
-                config=crawler_config
-            )
-            
+        async with AsyncWebCrawler(config=browser_cfg, verbose=False) as crawler:
+            print("  Loading UNGM page with virtual scroll...")
+            result = await crawler.arun(url=url, config=crawler_config)
+
             if not result.success:
                 print(f"✗ Error loading UNGM page: {result.error_message}")
                 return []
-            
-            html_content = result.html
+
+            html_content = result.html or ""
             print(f"  HTML length after virtual scroll: {len(html_content)}")
-            
-            # Debug: Save HTML to file for inspection
-            try:
-                with open('ungm_debug.html', 'w', encoding='utf-8') as f:
-                    f.write(html_content)
-                print(f"  ✓ Saved HTML to ungm_debug.html for inspection")
-            except Exception as e:
-                print(f"  ⚠ Could not save debug HTML: {str(e)}")
-            
-            # Debug: Check if table exists in HTML
-            if 'table' in html_content.lower():
-                print(f"  ✓ Found 'table' keyword in HTML")
+
+            if "tblNotices" in html_content or 'role="table"' in html_content:
+                print("  ✓ Found UNGM table markers in HTML")
             else:
-                print(f"  ⚠ WARNING: 'table' keyword not found in HTML - page structure may be different")
-            
-            # Extract notices from the HTML (after virtual scroll)
+                print("  ⚠ WARNING: UNGM table markers not found — page may not have rendered")
+
             all_notices = extract_ungm_notices(html_content, url_config)
             print(f"  Total notices extracted: {len(all_notices)}")
-            
-            # For UNGM, be less strict with filtering
-            # Since UNGM is a procurement portal, most items are relevant
-            # Only filter out if it's clearly not related to our domain
+
+            today = datetime.now().strftime("%Y-%m-%d")
+
             for item in all_notices:
+                deadline = (item.get("deadline") or "")[:10]
+                if deadline and len(deadline) == 10 and deadline < today:
+                    continue
+
+                if skip_keyword:
+                    scraped_items.append(item)
+                    continue
+
                 is_relevant = filter_relevant_content(item, keywords)
-                
-                # Also check if beneficiary country matches our regions
+
                 if not is_relevant:
-                    beneficiary = item.get('beneficiary_country', '').lower()
+                    beneficiary = item.get("beneficiary_country", "").lower()
                     if beneficiary:
-                        region_keywords = ['pakistan', 'mena', 'middle east', 'north africa', 'arab', 'gulf', 'saudi', 'uae', 'egypt', 'jordan', 'lebanon']
+                        region_keywords = [
+                            "pakistan", "mena", "middle east", "north africa",
+                            "arab", "gulf", "saudi", "uae", "egypt", "jordan", "lebanon",
+                        ]
                         if any(region in beneficiary for region in region_keywords):
                             is_relevant = True
-                            print(f"    ✓ Included due to beneficiary country: {item.get('beneficiary_country', '')}")
-                
-                # For UNGM, if it has organization, type, and beneficiary, it's likely relevant
-                # (UNGM items are generally procurement opportunities which are relevant)
+
                 if not is_relevant:
-                    has_org = item.get('organization', '')
-                    has_type = item.get('opportunity_type', '')
-                    has_beneficiary = item.get('beneficiary_country', '')
+                    has_org = item.get("organization", "")
+                    has_type = item.get("opportunity_type", "")
+                    has_beneficiary = item.get("beneficiary_country", "")
                     if has_org and has_type and has_beneficiary:
-                        # Include it - it's a valid procurement notice
                         is_relevant = True
-                        print(f"    ✓ Included as valid UNGM procurement notice")
-                
+
                 if is_relevant:
                     scraped_items.append(item)
-                else:
-                    # Debug: show why item was filtered out
-                    print(f"    ⚠ Filtered out: {item.get('title', '')[:60]}...")
-                    print(f"      Description: {item.get('description', '')[:80]}...")
-            
-            if scraped_items:
-                print(f"✓ {url_config['name']}: Found {len(scraped_items)} relevant notices (from {len(all_notices)} total)")
-                # Debug: show all items
-                for idx, item in enumerate(scraped_items):
-                    print(f"    Item {idx+1}: {item.get('title', '')[:70]}")
-                    print(f"      Link: {item.get('link', 'N/A')}")
-                    print(f"      Organization: {item.get('organization', 'N/A')}")
-                    print(f"      Beneficiary: {item.get('beneficiary_country', 'N/A')}")
-            else:
-                print(f"⚠ {url_config['name']}: Found {len(all_notices)} notices but none matched keywords")
-                if all_notices:
-                    print(f"  Debug - Showing first 3 notices:")
-                    for idx, item in enumerate(all_notices[:3]):
-                        print(f"    Notice {idx+1}:")
-                        print(f"      Title: {item.get('title', '')[:100]}")
-                        print(f"      Description: {item.get('description', '')[:100]}")
-                        print(f"      Categories: {item.get('categories', [])}")
-                        print(f"      Link: {item.get('link', 'N/A')}")
-                    print(f"  Keywords checked: {keywords}")
-            
+
+            print(
+                f"✓ {url_config['name']}: {len(scraped_items)} notices kept "
+                f"(from {len(all_notices)} extracted)"
+            )
             return scraped_items
-            
+
     except Exception as e:
-        print(f"✗ Error scraping UNGM: {str(e)}")
-        import traceback
-        print(f"  Traceback: {traceback.format_exc()}")
+        print(f"✗ UNGM scrape error: {e}")
         return []
 
 
@@ -1677,6 +1708,14 @@ async def scrape_single_url(url_config: Dict[str, Any]) -> List[Dict[str, Any]]:
         if url_config.get("id") == "gcf-negotiations":
             return await scrape_gcf_negotiations_with_scroll(url_config)
 
+        # PakTender — plain HTTP table (pages 1–2); skip keyword filter in dedicated path
+        if "paktender.com" in url.lower() or url_config.get("id") == "paktender":
+            return await scrape_paktender_pages(url_config)
+
+        # UNGM — JS table needs browser scroll; dedicated path (not generic Crawl4AI first)
+        if "ungm.org" in url.lower() or url_config.get("id") == "ungm":
+            return await scrape_ungm_with_scroll(url_config)
+
         html_content = None
 
         # Default: use Crawl4AI for dynamic sites
@@ -1711,62 +1750,6 @@ async def scrape_single_url(url_config: Dict[str, Any]) -> List[Dict[str, Any]]:
         if _is_cloudflare_challenge(html_content):
             print("✗ Cloudflare challenge blocked the scrape.")
             return []
-                
-        # Check if this is ungm.org - use infinite scroll scraping
-        if 'ungm.org' in url.lower():
-            print(f"  Detected ungm.org - using infinite scroll scraping")
-            return await scrape_ungm_with_scroll(url_config)
-        
-        # Check if this is paktender.com - use table extraction with pagination
-        if 'paktender.com' in url.lower():
-            print(f"  Detected paktender.com - using URL: {url}")
-            print(f"  Extracting table data from pages 1-2...")
-            all_table_items = []
-            
-            # First, extract from the current page (page 1)
-            page1_items = extract_paktender_table(html_content, url_config)
-            all_table_items.extend(page1_items)
-            print(f"  Page 1: Extracted {len(page1_items)} items from {url}")
-            
-            # Scrape page 2 - use the correct URL format
-            page2_url = url
-            if '?' in page2_url:
-                page2_url = f"{page2_url}&page=2"
-            else:
-                page2_url = f"{page2_url}?page=2"
-            
-            print(f"  Scraping page 2: {page2_url}")
-            try:
-                async with AsyncWebCrawler(verbose=False) as crawler:
-                    result2 = await crawler.arun(url=page2_url, config=crawler_config)
-                    if result2.success and result2.html:
-                        page2_items = extract_paktender_table(result2.html, url_config)
-                        all_table_items.extend(page2_items)
-                        print(f"  Page 2: Extracted {len(page2_items)} items")
-                    else:
-                        print(f"  ⚠ Page 2: Failed to fetch or parse")
-            except Exception as e:
-                print(f"  ⚠ Page 2: Error - {str(e)}")
-                # Continue even if page 2 fails
-            
-            print(f"  Total extracted {len(all_table_items)} raw items from {min(2, len(all_table_items))} page(s)")
-            
-            # Filter each item for relevance
-            for item in all_table_items:
-                if filter_relevant_content(item, keywords):
-                    scraped_items.append(item)
-            
-            if scraped_items:
-                print(f"✓ {url_config['name']}: Found {len(scraped_items)} relevant tenders from pages 1-2")
-            else:
-                print(f"⚠ {url_config['name']}: Found {len(all_table_items)} tenders but none matched keywords")
-                # Debug: show first item to understand why filtering failed
-                if all_table_items:
-                    first_item = all_table_items[0]
-                    print(f"  Debug - First item title: {first_item.get('title', '')[:100]}")
-                    print(f"  Debug - First item keywords check: {keywords}")
-            
-            return scraped_items
         
         # Extract meta information (for non-table pages)
         meta_info = extract_meta_info(html_content)

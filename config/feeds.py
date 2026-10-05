@@ -108,7 +108,9 @@ config = {
             "type": "scrape",
             "url": "https://paktender.com/tenders.php",
             "description": "Pakistan tender portal providing government and private tenders, RFPs, and procurement opportunities across Pakistan. Focuses on infrastructure, construction, and development projects.",
-            "keywords": ["pakistan", "tender", "procurement", "rfp", "bid", "government", "infrastructure", "construction", "development", "civil works", "energy", "solar", "renewable", "climate", "sustainability"]
+            "keywords": [],
+            "skip_ai_filter": True,
+            "skip_keyword_filter": True
         },
         {
             "id": "ungm",
@@ -116,7 +118,9 @@ config = {
             "type": "scrape",
             "url": "https://www.ungm.org/Public/Notice",
             "description": "United Nations Global Marketplace procurement notices, tenders, RFPs, and bidding opportunities. Includes climate, sustainability, energy, and development projects worldwide.",
-            "keywords": ["united nations", "un", "ungm", "procurement", "tender", "rfp", "bid", "contract", "climate", "sustainability", "energy", "renewable", "environment", "development", "pakistan", "mena"]
+            "keywords": [],
+            "skip_ai_filter": True,
+            "skip_keyword_filter": True
         },
         {
             "id": "propakistani-business",
