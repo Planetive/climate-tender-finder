@@ -23,7 +23,7 @@ import { OpportunityCard } from "@/components/dashboard/OpportunityCard";
 import { useNavigate } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { useSearch } from "@/context/SearchContext";
-import { fetchOpportunities, type Opportunity } from "@/services/api";
+import { fetchOpportunities, fetchSources, type Opportunity } from "@/services/api";
 
 const relevanceStyles = {
   High: "bg-primary/10 text-primary border-primary/20",
@@ -43,17 +43,22 @@ export default function Opportunities() {
   const { searchQuery, setSearchQuery, filters, updateFilter } = useSearch();
   const [viewMode, setViewMode] = useState<"table" | "cards">("table");
   const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
+  const [configuredSourceNames, setConfiguredSourceNames] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Fetch opportunities from API when component mounts
+  // Fetch opportunities and configured sources when component mounts
   useEffect(() => {
     async function loadOpportunities() {
       try {
         setLoading(true);
         setError(null);
-        const data = await fetchOpportunities(1000); // Fetch up to 1000 opportunities across all sources
+        const [data, sources] = await Promise.all([
+          fetchOpportunities(1000),
+          fetchSources(),
+        ]);
         setOpportunities(data);
+        setConfiguredSourceNames(sources.map((s) => s.name).sort());
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load opportunities');
         console.error('Error loading opportunities:', err);
@@ -69,9 +74,12 @@ export default function Opportunities() {
     index === self.findIndex((o) => o.id === opp.id)
   );
 
-  // Get unique sources for the filter dropdown
+  // All configured sources in the dropdown (even if this fetch returned 0 items)
   const uniqueSources = Array.from(
-    new Set(uniqueOpportunities.map((opp) => opp.source))
+    new Set([
+      ...configuredSourceNames,
+      ...uniqueOpportunities.map((opp) => opp.source),
+    ])
   ).sort();
 
   const filteredOpportunities = uniqueOpportunities.filter((opp) => {

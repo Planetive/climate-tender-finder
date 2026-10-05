@@ -2,7 +2,7 @@ import asyncio
 import hashlib
 import sys
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 import re
 
@@ -848,7 +848,7 @@ def extract_secp_notifications(html: str, url_config: Dict[str, Any]) -> List[Di
     """
     from bs4 import BeautifulSoup
     from urllib.parse import urljoin
-    from datetime import datetime
+    from datetime import datetime, timedelta
 
     base_url = "https://www.secp.gov.pk"
     soup = BeautifulSoup(html, "html.parser")
@@ -940,6 +940,8 @@ def extract_secp_notifications(html: str, url_config: Dict[str, Any]) -> List[Di
             "image": None,
             "notification_date": raw_date,
             "download_url": download_url,
+            "country": "Pakistan",
+            "location": "Pakistan",
         }
 
         items.append(item)
@@ -990,6 +992,7 @@ async def scrape_secp_notifications_with_retry(url_config: Dict[str, Any]) -> Li
 
     print("  Detected SECP notifications — Cloudflare-aware scrape...")
     print(f"  URL: {url}")
+    print("  Note: plain HTTP/Jina get 403; Gemini cannot bypass Cloudflare — need Chromium.")
 
     # Baseline profile matched the winning strategy test (A_baseline_domcontent)
     browser_cfg = BrowserConfig(
@@ -1003,16 +1006,17 @@ async def scrape_secp_notifications_with_retry(url_config: Dict[str, Any]) -> Li
         ),
     )
 
-    max_attempts = 3
-    cooldowns = [15, 30, 45]  # seconds between attempts
-    settle_delays = [4.0, 8.0, 12.0]
+    max_attempts = 4
+    cooldowns = [15, 30, 45, 60]  # seconds between attempts
+    settle_delays = [4.0, 8.0, 12.0, 16.0]
     html_content = None
     last_error = None
 
     for attempt in range(1, max_attempts + 1):
         settle = settle_delays[attempt - 1]
         print(f"  SECP attempt {attempt}/{max_attempts} (domcontentloaded + {settle}s settle)...")
-        run_cfg = CrawlerRunConfig(
+        # magic / simulate_user help some Cloudflare challenges when Chromium is installed
+        run_kwargs = dict(
             word_count_threshold=1,
             remove_overlay_elements=True,
             screenshot=False,
@@ -1022,6 +1026,16 @@ async def scrape_secp_notifications_with_retry(url_config: Dict[str, Any]) -> Li
             wait_until="domcontentloaded",
             delay_before_return_html=settle,
         )
+        for extra in ("magic", "simulate_user", "override_navigator"):
+            run_kwargs[extra] = True
+        try:
+            run_cfg = CrawlerRunConfig(**run_kwargs)
+        except TypeError:
+            # Older Crawl4AI without magic flags
+            run_kwargs.pop("magic", None)
+            run_kwargs.pop("simulate_user", None)
+            run_kwargs.pop("override_navigator", None)
+            run_cfg = CrawlerRunConfig(**run_kwargs)
         try:
             async with AsyncWebCrawler(config=browser_cfg, verbose=False) as crawler:
                 result = await crawler.arun(url=url, config=run_cfg)
@@ -1251,148 +1265,151 @@ async def scrape_undp_pakistan_procurement(url_config: Dict[str, Any]) -> List[D
     return notices
 
 
+def _parse_propakistani_date_text(text: str) -> Optional[datetime]:
+    """Parse dates like 'Oct 5, 2026 | 10:21 am' or '10:21 am | Oct 5, 2026'."""
+    if not text:
+        return None
+    text = text.strip()
+    patterns = [
+        r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2}),\s+(\d{4})",
+        r"(\d{1,2})-(\d{1,2})-(\d{4})",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if not match:
+            continue
+        if pattern.startswith("(Jan"):
+            month_str, day_str, year_str = match.groups()
+            try:
+                return datetime.strptime(f"{month_str} {day_str} {year_str}", "%b %d %Y")
+            except ValueError:
+                continue
+        day_str, month_str, year_str = match.groups()
+        try:
+            return datetime(int(year_str), int(month_str), int(day_str))
+        except ValueError:
+            continue
+    lowered = text.lower()
+    now = datetime.now()
+    if any(k in lowered for k in ("just now", "minute ago", "hour ago", "today")):
+        return now
+    if "yesterday" in lowered or re.search(r"\b1 day ago\b", lowered):
+        return now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
+    day_ago = re.search(r"(\d+)\s+days?\s+ago", lowered)
+    if day_ago:
+        return now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=int(day_ago.group(1)))
+    return None
+
+
+def _propakistani_article_blocks(soup: BeautifulSoup) -> List[Any]:
+    """Find listing blocks on ProPakistani category pages."""
+    blocks = soup.find_all("article")
+    if not blocks:
+        blocks = soup.select('div[class*="post"], div[class*="story"], div[class*="article"]')
+    if not blocks:
+        blocks = [
+            h for h in soup.find_all(["h2", "h3", "h4", "h5"])
+            if h.find("a", href=True)
+        ]
+    return blocks
+
+
 def extract_propakistani_articles(html: str, url_config: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
-    Extract articles from ProPakistani Business category page
-    Only includes articles published today with sustainability/green energy keywords
-    
-    Args:
-        html: HTML content from ProPakistani business page
-        url_config: Configuration for this source
-        
-    Returns:
-        List of articles with sustainability/green energy focus from today
+    Extract recent articles from ProPakistani Business category page.
+    Includes items from the last few days (site shows dates like 'Oct 5, 2026 | 10:21 am').
     """
-    from datetime import datetime
-    
-    articles = []
-    
+    max_days = int(url_config.get("max_age_days", 7))
+    cutoff = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=max_days)
+    articles: List[Dict[str, Any]] = []
+    seen_links: set = set()
+
     try:
-        soup = BeautifulSoup(html, 'html.parser')
-        
-        # ProPakistani uses article post containers (typically <article> or <div class="post">)
-        # Look for article containers
-        article_elements = soup.find_all(['article', 'div'], class_=lambda x: x and ('post' in x.lower() or 'article' in x.lower() or 'story' in x.lower()))
-        
-        print(f"  Found {len(article_elements)} article containers")
-        
-        # Get today's date in various formats (as articles might show "1 hour ago", "today", "Jan 24", etc.)
-        today = datetime.now()
-        today_str = today.strftime("%b %d").lstrip('0').replace(' 0', ' ')  # "Jan 24" format
-        today_str_alt = today.strftime("%d-%m-%Y")  # "24-01-2026" format
-        
-        articles_added = 0
-        
+        soup = BeautifulSoup(html, "html.parser")
+        article_elements = _propakistani_article_blocks(soup)
+        print(f"  Found {len(article_elements)} ProPakistani listing blocks")
+
         for article_elem in article_elements:
             try:
-                # Extract title
-                title_tag = article_elem.find(['h2', 'h3', 'h4', 'a'])
+                title_tag = article_elem.find(["h2", "h3", "h4", "h5", "a"])
                 if not title_tag:
                     continue
-                    
                 title = title_tag.get_text().strip()
-                if not title:
+                if not title or len(title) < 8:
                     continue
-                
-                # Extract link
-                link_tag = article_elem.find('a', href=True)
+
+                link_tag = article_elem.find("a", href=True)
                 if not link_tag:
                     continue
-                    
-                link = link_tag.get('href', '')
-                if not link:
+                link = link_tag.get("href", "").strip()
+                if not link or "/category/" in link or "/tag/" in link or "/author/" in link:
                     continue
-                
-                # Make sure link is absolute URL
-                if link.startswith('/'):
-                    link = 'https://propakistani.pk' + link
-                elif not link.startswith('http'):
-                    link = 'https://propakistani.pk/' + link
-                
-                # Extract publication date/time
-                date_text = ""
-                time_elem = article_elem.find(['time', 'span'], class_=lambda x: x and ('time' in x.lower() or 'date' in x.lower() or 'posted' in x.lower()))
-                
-                if time_elem:
-                    date_text = time_elem.get_text().strip().lower()
-                else:
-                    # Try to find date in text near the article
-                    for text_elem in article_elem.find_all(['span', 'div', 'p'], limit=10):
-                        elem_text = text_elem.get_text().strip().lower()
-                        if any(keyword in elem_text for keyword in ['ago', 'today', 'hour', 'day', 'jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']):
-                            date_text = elem_text
-                            break
-                
-                # Check if article is from today
-                # Skip if date text shows older articles (e.g., "1 day ago", "2 days ago", yesterday date, etc.)
-                is_today = False
-                
-                if date_text:
-                    # Check for "today" keyword
-                    if 'today' in date_text or 'hour ago' in date_text or 'minute ago' in date_text or 'just now' in date_text or 'ago' in date_text and 'day ago' not in date_text:
-                        is_today = True
-                    # Check for today's date format "Jan 24" or "24-01-2026"
-                    elif today_str in date_text or today_str_alt in date_text:
-                        is_today = True
-                    # If we see older dates, stop scraping (they're sorted newest first)
-                    elif any(keyword in date_text for keyword in ['yesterday', 'day ago', 'days ago']):
-                        # Stop scraping - all subsequent articles will be older
-                        print(f"  ⚠ Stopped scraping at older article: '{title[:60]}...' (dated: {date_text[:50]})")
+                if link.startswith("/"):
+                    link = "https://propakistani.pk" + link
+                elif not link.startswith("http"):
+                    link = "https://propakistani.pk/" + link
+                if link in seen_links:
+                    continue
+
+                block_text = article_elem.get_text(" ", strip=True)
+                parent_text = ""
+                parent = article_elem.parent
+                for _ in range(3):
+                    if parent is None:
                         break
-                else:
-                    # If we can't determine date, assume it's recent
-                    is_today = True
-                
-                # Extract description/summary
+                    parent_text = parent.get_text(" ", strip=True)
+                    if re.search(r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},\s+\d{4}", parent_text, re.I):
+                        break
+                    parent = parent.parent
+
+                date_text = block_text if re.search(r"\d{4}", block_text) else parent_text
+                parsed_date = _parse_propakistani_date_text(date_text)
+                if parsed_date and parsed_date.replace(hour=0, minute=0, second=0, microsecond=0) < cutoff:
+                    continue
+                if not parsed_date:
+                    # No date found — skip (do not guess)
+                    continue
+
                 description = ""
-                desc_elem = article_elem.find('p', class_=lambda x: x and ('summary' in str(x).lower() or 'excerpt' in str(x).lower() or 'desc' in str(x).lower()))
-                if not desc_elem:
-                    # Try to get first paragraph
-                    desc_elem = article_elem.find('p')
-                
+                desc_elem = article_elem.find("p")
                 if desc_elem:
                     description = desc_elem.get_text().strip()[:300]
-                
-                # Extract image if available
+
                 image = ""
-                img_elem = article_elem.find('img')
+                img_elem = article_elem.find("img")
                 if img_elem:
-                    image = img_elem.get('src') or img_elem.get('data-src') or ""
-                    if image and image.startswith('/'):
-                        image = 'https://propakistani.pk' + image
-                
-                # If today, add it (no keyword filtering - pull everything from today)
-                if is_today:
-                    pub_date = datetime.now().isoformat()
-                    
-                    article = {
-                        "id": generate_item_id(link, title, pub_date),
-                        "title": title,
-                        "link": link,
-                        "description": description,
-                        "content": description,  # Use description as content for articles
-                        "pubDate": pub_date,
-                        "author": url_config.get('name', 'ProPakistani'),
-                        "categories": [],
-                        "source": {
-                            "id": url_config["id"],
-                            "name": url_config["name"],
-                            "url": url_config["url"]
-                        },
-                        "image": image if image else None
-                    }
-                    
-                    articles.append(article)
-                    articles_added += 1
-                    print(f"  ✓ Article added: {title[:70]}... (date: {date_text[:40]})")
-                    
+                    image = img_elem.get("src") or img_elem.get("data-src") or ""
+                    if image.startswith("/"):
+                        image = "https://propakistani.pk" + image
+
+                pub_date = parsed_date.isoformat()
+                seen_links.add(link)
+                articles.append({
+                    "id": generate_item_id(link, title, pub_date),
+                    "title": title,
+                    "link": link,
+                    "description": description,
+                    "content": description,
+                    "pubDate": pub_date,
+                    "author": url_config.get("name", "ProPakistani"),
+                    "categories": ["Pakistan", "Business"],
+                    "source": {
+                        "id": url_config["id"],
+                        "name": url_config["name"],
+                        "url": url_config["url"],
+                    },
+                    "image": image or None,
+                    "country": "Pakistan",
+                    "location": "Pakistan",
+                })
+                print(f"  ✓ ProPakistani: {title[:70]}...")
             except Exception as e:
-                print(f"  ⚠ Error processing article element: {str(e)}")
+                print(f"  ⚠ Error processing ProPakistani block: {e}")
                 continue
-        
-        print(f"  Total articles extracted: {articles_added}")
+
+        print(f"  Total ProPakistani articles (last {max_days} days): {len(articles)}")
         return articles
-        
+
     except Exception as e:
         print(f"  ✗ Error extracting ProPakistani articles: {str(e)}")
         return []
@@ -1455,19 +1472,6 @@ async def scrape_single_url(url_config: Dict[str, Any]) -> List[Dict[str, Any]]:
         if 'ungm.org' in url.lower():
             print(f"  Detected ungm.org - using infinite scroll scraping")
             return await scrape_ungm_with_scroll(url_config)
-        
-        # Check if this is ProPakistani Business - use article extraction with date/keyword filtering
-        if 'propakistani.pk' in url.lower():
-            print(f"  Detected ProPakistani - extracting all business articles from today...")
-            articles = extract_propakistani_articles(html_content, url_config)
-            
-            if articles:
-                scraped_items.extend(articles)
-                print(f"✓ {url_config['name']}: Found {len(articles)} articles from today")
-            else:
-                print(f"⚠ {url_config['name']}: No articles found from today")
-            
-            return scraped_items
         
         # Check if this is paktender.com - use table extraction with pagination
         if 'paktender.com' in url.lower():

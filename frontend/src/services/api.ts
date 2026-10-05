@@ -35,6 +35,7 @@ interface BackendFeedItem {
   deadline?: string; // Deadline field from backend (for paktender and other sources)
   development_area?: string;
   location?: string;
+  country?: string; // Structured country when source provides it (e.g. ADB Countries:)
   reference_number?: string;
   posted?: string;
   deadline_display?: string;
@@ -175,9 +176,26 @@ function transformFeedToOpportunity(item: BackendFeedItem): Opportunity {
  * Extract country from feed item
  */
 function extractCountry(item: BackendFeedItem): string {
+  // Prefer structured country from backend (ADB Countries: field, etc.)
+  const structured = (item.country || item.location || "").trim();
+  if (structured) {
+    if (/^regional$/i.test(structured)) return "Regional";
+    return structured;
+  }
+
   if (item.source?.id === 'undp-pakistan-procurement' || item.source?.name?.toLowerCase().includes('undp pakistan')) {
     return 'Pakistan';
   }
+
+  // ADB category blobs sometimes land in categories before backend parse (legacy)
+  for (const cat of item.categories || []) {
+    const match = cat.match(/Countries:\s*([^|]+)/i);
+    if (match) {
+      const value = match[1].trim();
+      if (value) return value;
+    }
+  }
+
   const text = `${item.title} ${item.description} ${item.content} ${item.location || ''}`.toLowerCase();
   
   // Check for specific countries
@@ -189,7 +207,7 @@ function extractCountry(item: BackendFeedItem): string {
   if (text.includes('afghanistan')) return 'Afghanistan';
   
   // Check for MENA countries
-  const menaCountries = ['uae', 'saudi arabia', 'egypt', 'jordan', 'lebanon', 'morocco', 'tunisia', 'algeria'];
+  const menaCountries = ['uae', 'saudi arabia', 'egypt', 'jordan', 'lebanon', 'morocco', 'tunisia', 'algeria', 'azerbaijan', 'georgia', 'turkey', 'türkiye'];
   for (const country of menaCountries) {
     if (text.includes(country)) {
       return country.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
@@ -211,15 +229,32 @@ function extractCountry(item: BackendFeedItem): string {
  * Extract region from feed item
  */
 function extractRegion(item: BackendFeedItem, country: string): string {
-  if (['Pakistan', 'India', 'Bangladesh', 'Sri Lanka', 'Nepal', 'Afghanistan'].includes(country)) {
+  const c = country.toLowerCase();
+
+  if (c === 'pakistan' || ['india', 'bangladesh', 'sri lanka', 'nepal', 'afghanistan'].includes(c)) {
     return 'South Asia';
   }
-  if (country.includes('MENA') || ['UAE', 'Saudi Arabia', 'Egypt', 'Jordan', 'Lebanon', 'Morocco', 'Tunisia', 'Algeria'].includes(country)) {
+
+  const mena = [
+    'uae', 'saudi arabia', 'egypt', 'jordan', 'lebanon', 'morocco', 'tunisia',
+    'algeria', 'azerbaijan', 'georgia', 'turkey', 'türkiye', 'iraq', 'qatar',
+    'bahrain', 'kuwait', 'oman', 'yemen', 'mena region',
+  ];
+  if (c.includes('mena') || mena.includes(c)) {
     return 'Middle East & North Africa';
   }
+
+  if (c === 'regional') {
+    return 'Regional';
+  }
+
   if (country === 'Global' || country === 'South Asia') {
     return country;
   }
+
+  // Multi-country strings from ADB (e.g. "Micronesia, Federated States of") stay Global unless matched
+  if (c.includes('pakistan')) return 'South Asia';
+
   return 'Global';
 }
 

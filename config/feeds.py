@@ -121,11 +121,14 @@ config = {
         {
             "id": "propakistani-business",
             "name": "ProPakistani - Business News",
-            "type": "scrape",
-            "url": "https://propakistani.pk/category/business/",
-            "description": "ProPakistani business news - all articles from business category.",
+            "type": "rss",
+            "url": "https://propakistani.pk/category/business/feed/",
+            "description": "ProPakistani business news via WordPress RSS (paginated, last 7 days). Same approach as the standalone ProPakistani crawler.",
             "keywords": [],
-            "skip_ai_filter": True
+            "max_age_days": 7,
+            "max_pages": 20,
+            "skip_ai_filter": True,
+            "skip_keyword_filter": True
         },
         {
             "id": "undp-pakistan-procurement",
@@ -141,9 +144,10 @@ config = {
             "name": "SECP - Laws & Notifications",
             "type": "scrape",
             "url": "https://www.secp.gov.pk/laws/notifications/",
-            "description": "Securities & Exchange Commission of Pakistan - legal notifications (date, title, downloadable file).",
+            "description": "Securities & Exchange Commission of Pakistan - legal notifications (date, title, downloadable file). Requires Playwright/Chromium on the server (Cloudflare blocks plain HTTP).",
             "keywords": [],
-            "skip_ai_filter": True
+            "skip_ai_filter": True,
+            "skip_keyword_filter": True
         }
     ]
 }
