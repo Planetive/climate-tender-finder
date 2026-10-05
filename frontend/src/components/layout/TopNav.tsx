@@ -58,16 +58,6 @@ export function TopNav() {
         <SidebarTrigger className="text-muted-foreground hover:text-foreground">
           <Menu className="w-5 h-5" />
         </SidebarTrigger>
-        <div className="flex items-center gap-3 hidden md:flex">
-          <img 
-            src="/planetive E logo.PNG" 
-            alt="Planetive Logo" 
-            className="h-8 w-auto object-contain"
-          />
-          <h1 className="text-lg font-semibold text-foreground">
-            Funding & Tenders Tracker
-          </h1>
-        </div>
       </div>
 
       <form onSubmit={handleSearch} className="flex-1 max-w-xl">
