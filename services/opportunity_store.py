@@ -394,7 +394,7 @@ async def delete_stale_adb_opportunities(
 
 async def delete_old_news(
     news_source_ids: List[str],
-    older_than_days: int = 7,
+    older_than_days: int = 2,
 ) -> int:
     """
     Delete news rows older than N days. Opportunities (grants/tenders) are NOT deleted.

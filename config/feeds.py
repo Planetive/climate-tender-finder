@@ -4,13 +4,17 @@ Add your RSS feed URLs and scraping URLs here
 Set "type": "rss" for RSS feeds, "type": "scrape" for websites to scrape
 
 content_kind:
-  - "news"         → kept 7 days, then deleted by the daily job
-  - "opportunity"  → grants/tenders/procurement — kept (not auto-deleted)
+  - "news"         → only today + yesterday (publish date); purged from DB after 2 days
+  - "opportunity"  → grants/tenders/procurement — longer windows; not auto-deleted by news purge
 
 Geography: Pakistan + MENA only (not India, Türkiye, etc.).
 Theme (opportunities): ESG advisory — energy, climate finance/risk, ESG,
 industrials (oil & gas, chemicals, paper, plastics, steel, …).
 """
+
+# News only: keep articles from today and yesterday (e.g. Oct 10 → Oct 10 + Oct 9).
+# Grants/tenders do NOT use this — they keep their own deadline / max_posted_age rules.
+NEWS_LOOKBACK_DAYS = 2
 
 config = {
     "feeds": [
@@ -19,6 +23,7 @@ config = {
             "name": "Asian Development Bank - Blogs",
             "type": "rss",
             "content_kind": "news",
+            "max_age_days": 2,
             "url": "https://feeds.feedburner.com/adb_blogs",
             "description": "Asian Development Bank blog posts on development in Asia and the Pacific, covering climate, sustainability, energy, and regional development",
             "keywords": ["asia", "pacific", "development", "adb"]
@@ -28,6 +33,7 @@ config = {
             "name": "ADB - News",
             "type": "rss",
             "content_kind": "news",
+            "max_age_days": 2,
             "url": "https://feeds.feedburner.com/adb_news",
             "description": "Asian Development Bank news releases on funding, projects, and initiatives related to climate, sustainability, energy, and development in Asia and the Pacific",
             "keywords": ["asia", "pacific", "development", "adb", "news", "funding", "grants"]
@@ -67,43 +73,114 @@ config = {
         {
             "id": "worldbank-news",
             "name": "World Bank News",
-            "type": "rss",
+            # Same filters as the All News listing page (topics + regions + Press Release).
+            # Page is JS; we hit search.worldbank.org/api/v2/news with those facets.
+            "type": "scrape",
             "content_kind": "news",
-            # einnews feed often expired/blocked — off by default; enable when URL works
-            "enabled": False,
-            "url": "https://worldbank.einnews.com/rss/h0gBn63QQVY1p0KW",
-            "description": "World Bank news and updates covering development projects, funding, loans, grants, and initiatives related to climate, sustainability, energy, and global development",
-            "keywords": ["world bank", "development", "funding", "loan", "grant", "project", "climate", "sustainability"]
+            "enabled": True,
+            "url": (
+                "https://www.worldbank.org/en/news/all"
+                "?topic_exact=Energy&topic_exact=Climate+Change&topic_exact=Renewable+Energy"
+                "&topic_exact=Fiscal+Policy+%26+Growth&topic_exact=Financial+Services+Sector"
+                "&topic_exact=Environment&topic_exact=Energy+and+Extractives"
+                "&topic_exact=Energy+Efficiency&topic_exact=Farming+and+Agribusiness"
+                "&topic_exact=Energy+Access&topic_exact=Financial+Infrastructure"
+                "&topic_exact=Data+and+AI&topic_exact=Investment+Climate"
+                "&topic_exact=Financial+Inclusion&topic_exact=Poverty"
+                "&topic_exact=Digital+and+AI&topic_exact=Trade"
+                "&topic_exact=Small+and+Medium+Enterprises+Finance"
+                "&displayconttype_exact=Press+Release&lang_exact=English"
+                "&admreg_exact=South+Asia&admreg_exact=Europe+and+Central+Asia"
+                "&admreg_exact=Middle+East%2C+North+Africa%2C+Afghanistan+%26+Pakistan"
+            ),
+            "description": "World Bank Press Releases filtered like the All News page (energy/climate/finance topics; South Asia, ECA, MENAAP).",
+            "keywords": ["world bank", "climate", "energy", "pakistan", "sustainability"],
+            "max_age_days": 2,
+            "api_rows": 30,
+            "skip_keyword_filter": True,
+            "wb_display_type": "Press Release",
+            "wb_topics": [
+                "Energy",
+                "Climate Change",
+                "Renewable Energy",
+                "Fiscal Policy & Growth",
+                "Financial Services Sector",
+                "Environment",
+                "Energy and Extractives",
+                "Energy Efficiency",
+                "Farming and Agribusiness",
+                "Energy Access",
+                "Financial Infrastructure",
+                "Data and AI",
+                "Investment Climate",
+                "Financial Inclusion",
+                "Poverty",
+                "Digital and AI",
+                "Trade",
+                "Small and Medium Enterprises Finance",
+            ],
+            # API facet spelling (comma before &) for MENAAP
+            "wb_regions": [
+                "South Asia",
+                "Europe and Central Asia",
+                "Middle East, North Africa, Afghanistan, & Pakistan",
+                "Middle East and North Africa",
+            ],
         },
         {
             "id": "environment-news",
             "name": "Environment News",
+            # EIN News RSS expired ("This feed has expired") — replaced with Climate Home News
             "type": "rss",
             "content_kind": "news",
-            "enabled": False,
-            "url": "https://environment.einnews.com/rss/lK_mooUKVG0hy8Z9",
-            "description": "Environment news covering pollution, climate change, conservation, environmental protection, and sustainability initiatives",
-            "keywords": ["environment", "pollution", "conservation", "environmental protection", "sustainability", "climate"]
+            "enabled": True,
+            "max_age_days": 2,
+            "url": "https://www.climatechangenews.com/feed/",
+            "description": "Climate/environment news via Climate Home News (replaces expired EIN News). PK/MENA geo filter still applies.",
+            "keywords": ["environment", "climate", "energy", "finance", "pakistan", "mena", "sustainability"],
+            "skip_keyword_filter": True,
         },
         {
             "id": "global-warming-news",
             "name": "Global Warming News",
+            # EIN News expired — Guardian climate-change RSS
             "type": "rss",
             "content_kind": "news",
-            "enabled": False,
-            "url": "https://globalwarming.einnews.com/rss/f0HZ3OvxRbdOOwBX",
-            "description": "Global warming and climate change news covering temperature rise, greenhouse gases, climate action, and mitigation strategies",
-            "keywords": ["global warming", "climate change", "greenhouse gases", "carbon emissions", "temperature", "mitigation", "adaptation"]
+            "enabled": True,
+            "max_age_days": 2,
+            "url": "https://www.theguardian.com/environment/climate-change/rss",
+            "description": "Guardian Climate Change RSS (replaces expired EIN Global Warming feed). PK/MENA geo filter still applies.",
+            "keywords": ["climate", "global warming", "environment", "energy", "emissions", "pakistan", "mena"],
+            "skip_keyword_filter": True,
         },
         {
             "id": "worldbank-energy",
             "name": "World Bank - Energy",
-            "type": "rss",
+            # blogs.worldbank.org/energy/feed returns 404 — use official news API (energy topics)
+            "type": "scrape",
             "content_kind": "news",
-            "enabled": False,
-            "url": "https://blogs.worldbank.org/energy/feed",
-            "description": "World Bank blog on energy topics covering renewable energy, energy access, energy efficiency, and sustainable energy solutions",
-            "keywords": ["world bank", "energy", "renewable energy", "solar", "wind", "energy access", "energy efficiency", "clean energy"]
+            "enabled": True,
+            "max_age_days": 2,
+            "url": "https://www.worldbank.org/en/topic/energy",
+            "description": "World Bank energy Press Releases via search API (blog RSS 404). Same region filters as World Bank News.",
+            "keywords": ["world bank", "energy", "renewable", "solar", "climate", "pakistan", "mena"],
+            "api_rows": 30,
+            "skip_keyword_filter": True,
+            "wb_display_type": "Press Release",
+            "wb_topics": [
+                "Energy",
+                "Renewable Energy",
+                "Energy and Extractives",
+                "Energy Efficiency",
+                "Energy Access",
+                "Climate Change",
+            ],
+            "wb_regions": [
+                "South Asia",
+                "Europe and Central Asia",
+                "Middle East, North Africa, Afghanistan, & Pakistan",
+                "Middle East and North Africa",
+            ],
         },
         {
             "id": "afdb-procurement",
@@ -131,6 +208,7 @@ config = {
             "name": "UNEP - News and Stories",
             "type": "rss",
             "content_kind": "news",
+            "max_age_days": 2,
             "url": "https://www.unep.org/news-and-stories/rss.xml",
             "description": "United Nations Environment Programme news, stories, press releases, and updates on climate change, biodiversity, pollution, and environmental protection",
             "keywords": ["unep", "united nations", "environment", "climate", "biodiversity", "pollution", "sustainability", "conservation", "ecosystem", "green"]
@@ -163,9 +241,9 @@ config = {
             "type": "rss",
             "content_kind": "news",
             "url": "https://propakistani.pk/category/business/feed/",
-            "description": "ProPakistani business news via WordPress RSS (paginated). Business news is allowed; stored for 7 days.",
+            "description": "ProPakistani business news via WordPress RSS (paginated). Only today + yesterday.",
             "keywords": [],
-            "max_age_days": 7,
+            "max_age_days": 2,
             "max_pages": 20,
             "skip_ai_filter": True,
             "skip_keyword_filter": True
@@ -207,7 +285,7 @@ config = {
 
 
 def news_source_ids() -> list:
-    """Source ids marked as news (7-day retention)."""
+    """Source ids marked as news (today + yesterday only)."""
     return [f["id"] for f in config["feeds"] if f.get("content_kind") == "news"]
 
 

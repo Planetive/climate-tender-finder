@@ -7,7 +7,13 @@ paper, plastics, steel, etc.) — what an ESG advisory needs for clients like
 Mari, OGDCL, and manufacturing companies.
 """
 import re
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
+
+try:
+    from config.feeds import NEWS_LOOKBACK_DAYS
+except Exception:
+    NEWS_LOOKBACK_DAYS = 2
 
 # --- Geography: Pakistan + MENA only -----------------------------------------
 
@@ -158,6 +164,34 @@ def is_out_of_scope_country(item: Dict[str, Any]) -> bool:
     if any(m in text for m in OUT_OF_SCOPE_MARKERS):
         return True
     return False
+
+
+def is_news_too_old(
+    item: Dict[str, Any],
+    lookback_days: int = NEWS_LOOKBACK_DAYS,
+    today: Optional[str] = None,
+) -> bool:
+    """
+    News only: True when publish/posted date is older than today + yesterday.
+
+    Example: if today is 2026-10-10, keep 2026-10-10 and 2026-10-09; drop 2026-10-08+.
+    Grants/tenders must NOT call this — they use deadline / max_posted_age instead.
+    Missing date → not dropped (avoid deleting unknowns).
+    """
+    from services.adb_enrichment import item_posted_iso
+
+    lookback_days = max(1, int(lookback_days or 2))
+    today_s = today or datetime.utcnow().strftime("%Y-%m-%d")
+    posted = item_posted_iso(item)
+    if not posted:
+        return False
+    try:
+        today_dt = datetime.strptime(today_s, "%Y-%m-%d")
+        posted_dt = datetime.strptime(posted, "%Y-%m-%d")
+    except ValueError:
+        return False
+    oldest_allowed = today_dt - timedelta(days=lookback_days - 1)
+    return posted_dt < oldest_allowed
 
 
 def matches_target_geography(item: Dict[str, Any]) -> bool:

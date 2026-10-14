@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 import {
   fetchSources,
   toggleSourceEnabled,
+  scrapeOneSource,
   fetchIngestStatus,
   triggerFeedRefresh,
   type IngestStatusResponse,
@@ -52,6 +53,9 @@ export default function Sources() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [togglingId, setTogglingId] = useState<string | null>(null);
+  /** Source id currently being scraped after turn-on */
+  const [scrapingSourceId, setScrapingSourceId] = useState<string | null>(null);
+  const [scrapingSourceName, setScrapingSourceName] = useState<string | null>(null);
   const [scraping, setScraping] = useState(false);
 
   async function handleRunScrape() {
@@ -94,10 +98,13 @@ export default function Sources() {
     }
   }
 
-  async function loadSources() {
+  async function loadSources(opts?: { silent?: boolean }) {
+    const silent = Boolean(opts?.silent);
     try {
-      setLoading(true);
-      setError(null);
+      if (!silent) {
+        setLoading(true);
+        setError(null);
+      }
       const [backendSources, status] = await Promise.all([
         fetchSources(),
         fetchIngestStatus(),
@@ -119,10 +126,12 @@ export default function Sources() {
       }));
       setSources(transformed);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load sources");
+      if (!silent) {
+        setError(err instanceof Error ? err.message : "Failed to load sources");
+      }
       console.error("Error loading sources:", err);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }
 
@@ -136,22 +145,27 @@ export default function Sources() {
   const last = ingest?.last_ingest;
 
   async function toggleSource(id: string, nextEnabled: boolean) {
+    const sourceName = sources.find((s) => s.id === id)?.name || id;
     setTogglingId(id);
     setSources((prev) =>
       prev.map((s) =>
         s.id === id
-          ? { ...s, enabled: nextEnabled, status: nextEnabled ? (s.healthStatus === "error" ? "error" : "active") : "paused" }
+          ? {
+              ...s,
+              enabled: nextEnabled,
+              status: nextEnabled
+                ? s.healthStatus === "error"
+                  ? "error"
+                  : "active"
+                : "paused",
+            }
           : s
       )
     );
+
+    // 1) Save on/off first
     try {
       await toggleSourceEnabled(id, nextEnabled);
-      toast({
-        title: nextEnabled ? "Source enabled" : "Source disabled",
-        description: nextEnabled
-          ? "It will run on Re-run feeds and the 7:00 AM PKT job."
-          : "It will be skipped on Re-run feeds and the 7:00 AM PKT job.",
-      });
     } catch (err) {
       setSources((prev) =>
         prev.map((s) =>
@@ -165,8 +179,62 @@ export default function Sources() {
         description: err instanceof Error ? err.message : "Try again",
         variant: "destructive",
       });
-    } finally {
       setTogglingId(null);
+      return;
+    }
+
+    setTogglingId(null);
+
+    // Turning OFF — done
+    if (!nextEnabled) {
+      toast({
+        title: "Source disabled",
+        description: "It will be skipped on Run scrape now and the 7:00 AM PKT job.",
+      });
+      return;
+    }
+
+    // 2) Turning ON — scrape this source now (keep switch ON even if scrape fails)
+    setScrapingSourceId(id);
+    setScrapingSourceName(sourceName);
+    toast({
+      title: `Scraping ${sourceName}`,
+      description: "Fetching this source now — hang on, this can take a minute…",
+    });
+
+    try {
+      const result = await scrapeOneSource(id);
+
+      if (result.running) {
+        toast({
+          title: "Another scrape is running",
+          description: "Source is on. Wait for the current job to finish, then use Run scrape now.",
+        });
+      } else if (!result.success) {
+        toast({
+          title: `${sourceName} scrape failed`,
+          description: result.error || "Could not fetch this source",
+          variant: "destructive",
+        });
+      } else {
+        const kept = result.items ?? 0;
+        const saved = result.upserted ?? kept;
+        toast({
+          title: `${sourceName} ready`,
+          description: `Got ${kept} relevant item${kept === 1 ? "" : "s"} · saved ${saved} to the database.`,
+        });
+      }
+      await loadSources({ silent: true });
+    } catch (err) {
+      toast({
+        title: `${sourceName} scrape failed`,
+        description: err instanceof Error ? err.message : "Try again or use Run scrape now",
+        variant: "destructive",
+      });
+      await loadSources({ silent: true });
+    } finally {
+      setScrapingSourceId(null);
+      setScrapingSourceName(null);
     }
   }
 
@@ -177,14 +245,14 @@ export default function Sources() {
           <div>
             <h1 className="text-2xl font-bold text-foreground">Sources</h1>
             <p className="text-muted-foreground mt-1">
-              Turn sources on/off. Disabled sources are skipped at 7:00 AM PKT and when you Re-run feeds.
+              Turn a source on to scrape it now. Off sources are skipped at 7:00 AM PKT and Run scrape now.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
             <Button
               variant="outline"
               onClick={loadSources}
-              disabled={loading || scraping}
+              disabled={loading || scraping || !!scrapingSourceId}
             >
               <RefreshCw className={`w-4 h-4 mr-2 ${loading ? "animate-spin" : ""}`} />
               {loading ? "Loading…" : "Refresh list"}
@@ -192,7 +260,7 @@ export default function Sources() {
             <Button
               className="bg-primary text-primary-foreground hover:bg-primary/90"
               onClick={handleRunScrape}
-              disabled={scraping || loading}
+              disabled={scraping || loading || !!scrapingSourceId}
               title="Manually run scrape (same job as 7:00 AM PKT)"
             >
               <RefreshCw className={`w-4 h-4 mr-2 ${scraping ? "animate-spin" : ""}`} />
@@ -200,6 +268,23 @@ export default function Sources() {
             </Button>
           </div>
         </div>
+
+        {/* Live banner while a single source is scraping after turn-on */}
+        {scrapingSourceId && (
+          <Card className="border-primary/40 bg-primary/5">
+            <CardContent className="p-4 flex items-center gap-3 text-sm">
+              <RefreshCw className="w-5 h-5 text-primary animate-spin shrink-0" />
+              <div>
+                <p className="font-medium text-foreground">
+                  Scraping {scrapingSourceName || scrapingSourceId}…
+                </p>
+                <p className="text-muted-foreground">
+                  Fetching and saving items for this source. Results appear when it finishes.
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Ingest health banner */}
         {!loading && last && (
@@ -308,47 +393,66 @@ export default function Sources() {
               <div className="divide-y divide-border">
                 {sources.map((source) => {
                   const StatusIcon = statusConfig[source.status].icon;
+                  const isScrapingThis = scrapingSourceId === source.id;
                   return (
                     <div
                       key={source.id}
-                      className="flex items-center justify-between p-4 hover:bg-accent/50 transition-colors"
+                      className={cn(
+                        "flex items-center justify-between p-4 hover:bg-accent/50 transition-colors",
+                        isScrapingThis && "bg-primary/5"
+                      )}
                     >
                       <div className="flex items-center gap-4 flex-1 min-w-0">
                         <Switch
                           checked={source.enabled}
-                          disabled={togglingId === source.id}
+                          disabled={
+                            togglingId === source.id ||
+                            !!scrapingSourceId ||
+                            scraping
+                          }
                           onCheckedChange={(checked) => toggleSource(source.id, checked)}
                         />
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
                             <h3 className="font-medium text-foreground">{source.name}</h3>
-                            <Badge
-                              variant="outline"
-                              className={cn("text-xs", statusConfig[source.status].color)}
-                            >
-                              <StatusIcon className="w-3 h-3 mr-1" />
-                              {statusConfig[source.status].label}
-                            </Badge>
+                            {isScrapingThis ? (
+                              <Badge variant="outline" className="text-xs border-primary text-primary">
+                                <RefreshCw className="w-3 h-3 mr-1 animate-spin" />
+                                Scraping…
+                              </Badge>
+                            ) : (
+                              <Badge
+                                variant="outline"
+                                className={cn("text-xs", statusConfig[source.status].color)}
+                              >
+                                <StatusIcon className="w-3 h-3 mr-1" />
+                                {statusConfig[source.status].label}
+                              </Badge>
+                            )}
                             <Badge variant="secondary" className="text-xs">
                               {source.contentKind === "news" ? "News" : "Opportunity"}
                             </Badge>
-                            {source.healthStatus === "empty" && source.enabled && (
+                            {source.healthStatus === "empty" && source.enabled && !isScrapingThis && (
                               <Badge variant="outline" className="text-xs">0 items</Badge>
                             )}
                           </div>
                           <div className="flex items-center gap-4 mt-1 text-sm text-muted-foreground flex-wrap">
                             <span>{source.category}</span>
                             <span>•</span>
-                            <span>Last run: {source.lastSync}</span>
+                            <span>
+                              {isScrapingThis
+                                ? "Fetching now…"
+                                : `Last run: ${source.lastSync}`}
+                            </span>
                             <span>•</span>
                             <span>{source.opportunitiesFound} stored</span>
                           </div>
-                          {source.lastError && (
+                          {source.lastError && !isScrapingThis && (
                             <p className="text-xs text-destructive mt-1 truncate" title={source.lastError}>
                               Error: {source.lastError}
                             </p>
                           )}
-                          {!source.lastError && source.healthMessage && source.healthStatus === "empty" && (
+                          {!source.lastError && source.healthMessage && source.healthStatus === "empty" && !isScrapingThis && (
                             <p className="text-xs text-muted-foreground mt-1">{source.healthMessage}</p>
                           )}
                         </div>

@@ -1479,6 +1479,176 @@ def extract_undp_pakistan_notices(js_payload: str, url_config: Dict[str, Any]) -
     return items
 
 
+def _wb_cdata(value: Any) -> str:
+    """World Bank API wraps many strings as {\"cdata!\": \"...\"}."""
+    if isinstance(value, dict):
+        return str(value.get("cdata!") or value.get("#text") or "").strip()
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _wb_topic_matches(doc_topics: str, wanted_topics: List[str]) -> bool:
+    """True if doc topic string overlaps the All News page topic filters."""
+    if not wanted_topics:
+        return True
+    hay = (doc_topics or "").lower()
+    title_blob = hay
+    for topic in wanted_topics:
+        t = (topic or "").lower().strip()
+        if not t:
+            continue
+        # loose match: "Energy and Extractives" ↔ "Energy And Extractives"
+        if t in title_blob:
+            return True
+        # token overlap for short labels
+        key = t.split("&")[0].split(" and ")[0].strip()
+        if len(key) >= 5 and key in title_blob:
+            return True
+    return False
+
+
+async def scrape_worldbank_news_api(url_config: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Fetch World Bank Press Releases using the same filters as the All News page.
+
+    The listing page is JS-rendered; the data comes from search.worldbank.org/api/v2/news.
+    Passing every topic+region in one request returns 0 rows, so we query per region
+    then keep items that match the selected topics + PK/MENA geography.
+    """
+    from urllib.parse import urlencode
+
+    max_age = int(url_config.get("max_age_days", 2))  # news: today + yesterday
+    rows = int(url_config.get("api_rows", 30))
+    display_type = url_config.get("wb_display_type") or "Press Release"
+    wanted_topics = list(url_config.get("wb_topics") or [])
+    regions = list(
+        url_config.get("wb_regions")
+        or [
+            "South Asia",
+            "Europe and Central Asia",
+            "Middle East, North Africa, Afghanistan, & Pakistan",
+            "Middle East and North Africa",
+        ]
+    )
+
+    print("  Detected World Bank News — All News page filters via search API")
+    print(f"  Regions: {len(regions)} · Topics: {len(wanted_topics)} · Type: {display_type}")
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Accept": "application/json",
+    }
+
+    docs_by_id: Dict[str, Dict[str, Any]] = {}
+    async with httpx.AsyncClient(timeout=45.0, follow_redirects=True, headers=headers) as client:
+        for region in regions:
+            params = {
+                "format": "json",
+                "rows": str(rows),
+                "os": "0",
+                "lang_exact": "English",
+                "admreg_exact": region,
+                "displayconttype_exact": display_type,
+            }
+            api_url = "https://search.worldbank.org/api/v2/news?" + urlencode(params)
+            try:
+                response = await client.get(api_url)
+                response.raise_for_status()
+                payload = response.json()
+            except Exception as e:
+                print(f"  ⚠ WB API failed for region {region!r}: {e}")
+                continue
+
+            documents = payload.get("documents") or {}
+            if isinstance(documents, dict):
+                batch = list(documents.values())
+            elif isinstance(documents, list):
+                batch = documents
+            else:
+                batch = []
+
+            print(f"  region {region[:42]!r}: {len(batch)} docs (total={payload.get('total')})")
+            for doc in batch:
+                did = str(doc.get("id") or doc.get("url") or "")
+                if did and did not in docs_by_id:
+                    docs_by_id[did] = doc
+
+    docs = list(docs_by_id.values())
+    cutoff = datetime.utcnow() - timedelta(days=max_age)
+    keywords = url_config.get("keywords", [])
+    items: List[Dict[str, Any]] = []
+    skipped_old = 0
+    skipped_topic = 0
+
+    for doc in docs:
+        title = _wb_cdata(doc.get("title"))
+        if not title or "feed has expired" in title.lower():
+            continue
+
+        topic_str = (doc.get("topic") or "").strip()
+        if wanted_topics and not _wb_topic_matches(f"{topic_str} {title}", wanted_topics):
+            skipped_topic += 1
+            continue
+
+        link = (doc.get("url") or "").strip()
+        if link.startswith("http://"):
+            link = "https://" + link[len("http://") :]
+
+        descr = _wb_cdata(doc.get("descr"))
+        content = _wb_cdata(doc.get("content")) or descr
+        lnchdt_raw = (doc.get("lnchdt") or "").strip()
+        pub_iso = datetime.utcnow().isoformat()
+        if lnchdt_raw:
+            try:
+                pub_dt = datetime.strptime(lnchdt_raw[:19], "%Y-%m-%dT%H:%M:%S")
+                if pub_dt < cutoff:
+                    skipped_old += 1
+                    continue
+                pub_iso = pub_dt.isoformat()
+            except ValueError:
+                pass
+
+        country = (doc.get("country") or doc.get("count") or "").strip()
+        categories = [c.strip() for c in topic_str.split(",") if c.strip()]
+        if country:
+            categories = [country] + categories
+
+        item: Dict[str, Any] = {
+            "id": generate_item_id(link or doc.get("id") or title, title, pub_iso),
+            "title": title,
+            "link": link,
+            "description": descr,
+            "content": content[:4000] if content else descr,
+            "pubDate": pub_iso,
+            "author": url_config.get("name", "World Bank News"),
+            "categories": categories,
+            "source": {
+                "id": url_config.get("id", "worldbank-news"),
+                "name": url_config.get("name", "World Bank News"),
+                "url": url_config.get("url") or "https://www.worldbank.org/en/news/all",
+            },
+            "country": country.split(",")[0].strip() if country else "",
+            "location": country,
+            "region": doc.get("admreg") or doc.get("regionname") or "",
+            "content_kind": "news",
+        }
+
+        # News: skip ESG keyword gate; still enforce Pakistan / MENA geography
+        if passes_content_filters(item, keywords, skip_keyword_filter=True):
+            items.append(item)
+
+    print(
+        f"✓ {url_config.get('name')}: kept {len(items)} "
+        f"(from {len(docs)} unique docs, skipped {skipped_topic} off-topic, "
+        f"{skipped_old} older than {max_age}d)"
+    )
+    return items
+
+
 async def scrape_undp_pakistan_procurement(url_config: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     Fetch UNDP Pakistan procurement notices via the public-components feed
@@ -1676,6 +1846,14 @@ async def scrape_single_url(url_config: Dict[str, Any]) -> List[Dict[str, Any]]:
         
         keywords = url_config.get('keywords', [])
         scraped_items = []
+
+        # World Bank News / Energy — official JSON API (blog RSS 404, EIN expired)
+        if (
+            url_config.get("id") in ("worldbank-news", "worldbank-energy")
+            or url_config.get("wb_regions")
+            or "search.worldbank.org/api" in url.lower()
+        ):
+            return await scrape_worldbank_news_api(url_config)
 
         # UNDP Pakistan procurement — JSON feed via public-components (no browser needed)
         if "undp.org" in url.lower() and "procurement" in url.lower():

@@ -760,10 +760,13 @@ export interface IngestResult {
   success: boolean;
   trigger?: string;
   items?: number;
+  items_raw?: number;
   upserted?: number;
   news_deleted?: number;
   sources_ok?: number;
   sources_error?: number;
+  source_id?: string;
+  source_name?: string;
   message?: string;
   warning?: string;
   running?: boolean;
@@ -814,6 +817,44 @@ export async function triggerFeedRefresh(): Promise<IngestResult> {
   if (!response.ok) {
     throw new Error(
       data?.detail?.error || data?.error || data?.message || `Refresh failed (${response.status})`
+    );
+  }
+
+  return data as IngestResult;
+}
+
+/**
+ * Scrape one source immediately (after turning it on).
+ * Can take 1–few minutes depending on the source.
+ */
+export async function scrapeOneSource(sourceId: string): Promise<IngestResult> {
+  cachedOpportunities = null;
+
+  const response = await fetch(
+    `${API_BASE_URL}/sources/${encodeURIComponent(sourceId)}/scrape`,
+    { method: "POST" }
+  );
+
+  const data = await response.json().catch(() => ({}));
+  const detail = data?.detail && typeof data.detail === "object" ? data.detail : data;
+
+  if (response.status === 409) {
+    return {
+      success: false,
+      running: true,
+      message: detail?.message || "Ingest already running",
+      source_id: sourceId,
+    };
+  }
+
+  if (!response.ok) {
+    if (response.status === 404) {
+      throw new Error(
+        "Scrape endpoint missing — restart the local backend (python main.py) to load the latest code."
+      );
+    }
+    throw new Error(
+      detail?.error || detail?.message || data?.error || `Scrape failed (${response.status})`
     );
   }
 

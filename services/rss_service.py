@@ -307,7 +307,8 @@ async def fetch_paginated_wordpress_rss(feed_config: Dict[str, Any]) -> List[Dic
     """
     base_url = feed_config["url"]
     max_pages = int(feed_config.get("max_pages", 20))
-    max_age_days = int(feed_config.get("max_age_days", 7))
+    # News default: today + yesterday (2). Do not use this path for grants/tenders.
+    max_age_days = int(feed_config.get("max_age_days", 2))
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(days=max_age_days)
 
@@ -422,6 +423,16 @@ async def fetch_single_feed(feed_config: Dict[str, Any]) -> List[Dict[str, Any]]
         if not feed.entries:
             print(f"⚠ No entries found in {feed_config['name']}")
             return []
+
+        # EIN News often leaves a single "This feed has expired" item
+        if any(
+            "feed has expired" in ((getattr(e, "title", None) or "")).lower()
+            for e in feed.entries
+        ):
+            raise RuntimeError(
+                f"{feed_config['name']}: RSS feed has expired (EIN News). "
+                "Update the source URL or disable this source."
+            )
 
         if feed_config.get('id') == 'unep-news' and len(feed.entries) > 0:
             first_item = feed.entries[0]

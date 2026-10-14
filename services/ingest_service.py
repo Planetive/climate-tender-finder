@@ -4,16 +4,17 @@ Daily ingest + news retention + per-source health.
 - Runs once per day at 07:00 Asia/Karachi (Pakistan time)
 - On API startup: catch-up if today's 07:00 PKT run was missed
 - Manual re-run via POST /api/feeds/refresh
-- News older than NEWS_RETENTION_DAYS (7) deleted; opportunities kept
+- News: only today + yesterday by publish date; purged from DB after NEWS_RETENTION_DAYS
+- Opportunities (grants/tenders): unchanged longer windows
 """
 import asyncio
 from datetime import datetime, timedelta, time
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
-from config.feeds import config as all_config, news_source_ids, stamp_content_kind
+from config.feeds import NEWS_LOOKBACK_DAYS, config as all_config, news_source_ids, stamp_content_kind
 from services.cache_service import get_cache_key, set_cached_data
-from services.content_filter import matches_target_geography
+from services.content_filter import is_news_too_old, matches_target_geography
 from services.ingest_status import load_ingest_status, notify_ingest_webhook, save_ingest_status
 from services.adb_enrichment import is_stale_posted
 from services.labeling import stamp_labels
@@ -28,7 +29,8 @@ from services.source_health import record_source_error, record_source_ok
 from services.source_settings import get_enabled_feed_configs
 
 PKT = ZoneInfo("Asia/Karachi")
-NEWS_RETENTION_DAYS = 7
+# DB purge for news rows (by scraped_at) — matches today+yesterday lookback
+NEWS_RETENTION_DAYS = NEWS_LOOKBACK_DAYS
 
 _ingest_lock = asyncio.Lock()
 _last_run: Optional[Dict[str, Any]] = None
@@ -88,6 +90,108 @@ async def _fetch_one_source(feed: Dict[str, Any]) -> List[Dict[str, Any]]:
     return await fetch_single_feed(feed)
 
 
+async def _process_one_feed(feed: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Fetch one feed, apply geo/stale filters, stamp labels.
+    Returns {id, name, status, items, items_raw, kept_items?, error?}.
+    """
+    sid = feed["id"]
+    name = feed.get("name", sid)
+    kind = feed.get("content_kind") or "opportunity"
+    try:
+        raw_items = await _fetch_one_source(feed)
+        raw_count = len(raw_items or [])
+        kept = [i for i in (raw_items or []) if matches_target_geography(i)]
+        if kind == "news":
+            # News: today + yesterday only (not grants/tenders)
+            lookback = int(feed.get("max_age_days") or NEWS_LOOKBACK_DAYS)
+            kept = [i for i in kept if not is_news_too_old(i, lookback_days=lookback)]
+        else:
+            # Opportunities: deadline / posted-age rules
+            max_age = int(feed.get("max_posted_age_days") or 365)
+            kept = [i for i in kept if not is_stale_posted(i, max_age_days=max_age)]
+        kept = stamp_content_kind(kept, [feed])
+        kept = stamp_labels(kept)
+        record_source_ok(sid, len(kept), items_raw=raw_count)
+        print(f"  ✓ {name}: {len(kept)} kept (raw {raw_count})")
+        return {
+            "id": sid,
+            "name": name,
+            "status": "ok",
+            "items": len(kept),
+            "items_raw": raw_count,
+            "kept_items": kept,
+        }
+    except Exception as e:
+        record_source_error(sid, str(e))
+        print(f"  ✗ {name}: {e}")
+        return {
+            "id": sid,
+            "name": name,
+            "status": "error",
+            "items": 0,
+            "items_raw": 0,
+            "kept_items": [],
+            "error": str(e)[:200],
+        }
+
+
+async def run_single_source_ingest(source_id: str, trigger: str = "source_toggle") -> Dict[str, Any]:
+    """
+    Scrape one source immediately (used when turning a source back on).
+    Shares the same lock as full ingest so jobs do not overlap.
+    """
+    global _last_run
+
+    feed = next((f for f in all_config["feeds"] if f["id"] == source_id), None)
+    if not feed:
+        return {
+            "success": False,
+            "error": f"Unknown source id: {source_id}",
+            "source_id": source_id,
+        }
+
+    if _ingest_lock.locked():
+        return {
+            "success": False,
+            "message": "Ingest already running — try again when it finishes",
+            "running": True,
+            "source_id": source_id,
+        }
+
+    async with _ingest_lock:
+        started = datetime.now(PKT)
+        print(f"\n⏱ Single-source ingest ({source_id}) started ({trigger}) at {started.isoformat()}")
+        result = await _process_one_feed(feed)
+        kept = result.pop("kept_items", []) or []
+        written = await upsert_opportunities(kept) if kept else 0
+
+        finished = datetime.now(PKT)
+        ok = result.get("status") == "ok"
+        payload = {
+            "success": ok,
+            "trigger": trigger,
+            "source_id": source_id,
+            "source_name": result.get("name") or feed.get("name"),
+            "started_at": started.isoformat(),
+            "finished_at": finished.isoformat(),
+            "items": result.get("items", 0),
+            "items_raw": result.get("items_raw", 0),
+            "upserted": written,
+            "sources_ok": 1 if ok else 0,
+            "sources_error": 0 if ok else 1,
+            "sources": [result],
+        }
+        if not ok:
+            payload["error"] = result.get("error") or "Scrape failed"
+        # Do not overwrite the daily full-ingest status with a single-source run
+        print(
+            f"✓ Single-source done ({source_id}): kept={payload['items']}, "
+            f"upserted={written}, ok={ok}"
+        )
+        return payload
+
+
 async def run_full_ingest(trigger: str = "manual") -> Dict[str, Any]:
     """
     Scrape enabled sources one-by-one (records health), label, upsert, purge news.
@@ -137,35 +241,14 @@ async def run_full_ingest(trigger: str = "manual") -> Dict[str, Any]:
             source_results = []
 
             for feed in enabled_feeds:
-                sid = feed["id"]
-                name = feed.get("name", sid)
-                try:
-                    raw_items = await _fetch_one_source(feed)
-                    raw_count = len(raw_items or [])
-                    kept = [i for i in (raw_items or []) if matches_target_geography(i)]
-                    # Drop past deadlines / decade-old ADB notices with no open deadline
-                    max_age = int(feed.get("max_posted_age_days") or 365)
-                    kept = [
-                        i
-                        for i in kept
-                        if not is_stale_posted(i, max_age_days=max_age)
-                    ]
-                    kept = stamp_content_kind(kept, [feed])
-                    kept = stamp_labels(kept)
-                    all_items.extend(kept)
-                    record_source_ok(sid, len(kept), items_raw=raw_count)
+                result = await _process_one_feed(feed)
+                kept = result.pop("kept_items", []) or []
+                all_items.extend(kept)
+                source_results.append(result)
+                if result.get("status") == "ok":
                     sources_ok += 1
-                    source_results.append(
-                        {"id": sid, "name": name, "status": "ok", "items": len(kept)}
-                    )
-                    print(f"  ✓ {name}: {len(kept)} kept (raw {raw_count})")
-                except Exception as e:
+                else:
                     sources_error += 1
-                    record_source_error(sid, str(e))
-                    source_results.append(
-                        {"id": sid, "name": name, "status": "error", "error": str(e)[:200]}
-                    )
-                    print(f"  ✗ {name}: {e}")
 
             cache_key = get_cache_key(enabled_feeds)
             await set_cached_data(cache_key, all_items, ttl_minutes=60 * 12)

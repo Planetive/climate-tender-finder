@@ -28,13 +28,16 @@ from services.opportunity_store import (
 )
 from services.adb_enrichment import is_stale_posted
 from services.content_filter import (
+    is_news_too_old,
     is_noise_procurement,
     matches_esg_theme,
     matches_target_geography,
 )
+from config.feeds import NEWS_LOOKBACK_DAYS, config
 from services.ingest_service import (
     daily_ingest_loop,
     run_full_ingest,
+    run_single_source_ingest,
     get_last_ingest_info,
     seconds_until_next_7am_pkt,
 )
@@ -45,7 +48,6 @@ from services.source_settings import (
     source_category,
 )
 from services.source_health import get_source_health
-from config.feeds import config
 
 
 def _adb_max_posted_age() -> dict:
@@ -92,10 +94,29 @@ def _filter_esg_theme(items: list) -> list:
     return kept
 
 
+def _filter_fresh_news(items: list) -> list:
+    """
+    News: hide anything older than today + yesterday.
+    Grants/tenders are left alone.
+    """
+    news_ids = _news_source_ids()
+    kept = []
+    for item in items:
+        source = item.get("source") or {}
+        sid = (source.get("id") or "") if isinstance(source, dict) else ""
+        kind = item.get("content_kind") or ""
+        is_news = kind == "news" or sid in news_ids
+        if is_news and is_news_too_old(item, lookback_days=NEWS_LOOKBACK_DAYS):
+            continue
+        kept.append(item)
+    return kept
+
+
 def _prepare_feed_items(items: list) -> list:
-    """Geo + ESG theme + stale ADB filter, then refresh High/Medium/Low labels."""
+    """Geo + ESG theme + fresh news + stale ADB filter, then refresh labels."""
     filtered = _filter_target_geo(items) if items else []
     filtered = _filter_esg_theme(filtered)
+    filtered = _filter_fresh_news(filtered)
     filtered = _filter_stale_adb(filtered)
     return stamp_labels(filtered)
 
@@ -210,7 +231,7 @@ async def get_feeds(
 
 @app.post("/api/feeds/refresh")
 async def refresh_feeds():
-    """Manual re-run: scrape all sources, upsert, purge news older than 7 days."""
+    """Manual re-run: scrape all sources, upsert, purge news older than today+yesterday window."""
     result = await run_full_ingest(trigger="manual")
     if result.get("running"):
         raise HTTPException(status_code=409, detail=result)
@@ -382,6 +403,26 @@ async def toggle_source(source_id: str, enabled: Optional[bool] = Query(None)):
         raise HTTPException(status_code=404, detail={"error": "Source not found"})
     except Exception as error:
         raise HTTPException(status_code=500, detail={"error": str(error)})
+
+
+@app.post("/api/sources/{source_id}/scrape")
+async def scrape_one_source(source_id: str):
+    """
+    Scrape one source now (used after turning a source back on).
+    Returns how many items were kept / saved so the UI can show a result.
+    """
+    settings = load_settings()
+    if source_id not in settings:
+        raise HTTPException(status_code=404, detail={"error": "Source not found"})
+
+    # Ensure it is enabled before scraping
+    if not settings.get(source_id, True):
+        set_source_enabled(source_id, True)
+
+    result = await run_single_source_ingest(source_id, trigger="source_enable")
+    if result.get("running"):
+        raise HTTPException(status_code=409, detail=result)
+    return result
 
 
 @app.post("/api/cache/clear")
