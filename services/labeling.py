@@ -2,11 +2,16 @@
 Stamp user-facing labels on items: opportunity_type + relevance.
 
 Why: frontend was guessing "Grant" for almost everything.
-We set clearer types for tenders/news and a simple High/Medium/Low relevance.
+Relevance is for an ESG advisory (energy, climate finance/risk, industrials).
 """
 from typing import Any, Dict, List
 
-from services.content_filter import MENA_MARKERS, PAKISTAN_MARKERS
+from services.content_filter import (
+    ESG_THEME_KEYWORDS,
+    MENA_MARKERS,
+    PAKISTAN_MARKERS,
+    score_relevance,
+)
 
 
 def _blob(item: Dict[str, Any]) -> str:
@@ -15,6 +20,7 @@ def _blob(item: Dict[str, Any]) -> str:
         item.get("description") or "",
         item.get("content") or "",
         item.get("opportunity_type") or "",
+        item.get("development_area") or "",
         " ".join(item.get("categories") or []),
     ]
     return " ".join(parts).lower()
@@ -70,27 +76,73 @@ def infer_opportunity_type(item: Dict[str, Any], content_kind: str) -> str:
 
 
 def infer_relevance(item: Dict[str, Any], content_kind: str) -> str:
-    """High / Medium / Low for list sorting and filters."""
+    """
+    High / Medium / Low for ESG-advisory usefulness.
+
+    High: Pakistan/MENA + strong ESG themes (climate finance/risk, energy, ESG, sector)
+    Medium: Pakistan/MENA with lighter theme hits, or strong theme without geo stamp
+    Low: weak theme match
+    """
     text = _blob(item)
-    country = (item.get("country") or item.get("location") or item.get("beneficiary_country") or "").lower()
+    country = (
+        item.get("country")
+        or item.get("location")
+        or item.get("beneficiary_country")
+        or ""
+    ).lower()
 
     pk = any(m in text or m in country for m in PAKISTAN_MARKERS)
     mena = any(m in text or m in country for m in MENA_MARKERS)
+    in_focus_geo = pk or mena
 
     high_terms = [
-        "climate finance", "esg", "carbon market", "mrv", "adaptation", "mitigation",
-        "deadline", "grant", "tender", "rfp", "procurement",
+        "esg",
+        "climate finance",
+        "climate risk",
+        "carbon market",
+        "mrv",
+        "net zero",
+        "net-zero",
+        "decarbon",
+        "sustainable finance",
+        "green finance",
+        "energy transition",
+        "renewable",
+        "oil",
+        "gas",
+        "petroleum",
+        "chemical",
+        "steel",
+        "cement",
+        "plastic",
+        "paper",
     ]
-    medium_terms = ["sustainability", "renewable", "solar", "clean energy", "green"]
+    medium_terms = [
+        "climate",
+        "energy",
+        "sustainability",
+        "carbon",
+        "emission",
+        "solar",
+        "wind",
+        "adaptation",
+        "mitigation",
+    ]
 
-    if content_kind == "opportunity" and (pk or mena) and any(t in text for t in high_terms):
+    strong = any(t in text for t in high_terms)
+    medium = any(t in text for t in medium_terms)
+    score = score_relevance(item)
+
+    if content_kind == "opportunity" and in_focus_geo and strong:
         return "High"
-    if pk or mena:
+    if in_focus_geo and (strong or score >= 3):
         return "High" if content_kind == "opportunity" else "Medium"
-    if any(t in text for t in high_terms):
+    if in_focus_geo and medium:
         return "Medium"
-    if any(t in text for t in medium_terms):
+    if strong or score >= 2:
         return "Medium"
+    if medium or any(k in text for k in ESG_THEME_KEYWORDS[:20]):
+        return "Low"
     return "Low"
 
 

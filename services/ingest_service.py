@@ -15,9 +15,13 @@ from config.feeds import config as all_config, news_source_ids, stamp_content_ki
 from services.cache_service import get_cache_key, set_cached_data
 from services.content_filter import matches_target_geography
 from services.ingest_status import load_ingest_status, notify_ingest_webhook, save_ingest_status
-from services.adb_enrichment import is_deadline_past
+from services.adb_enrichment import is_stale_posted
 from services.labeling import stamp_labels
-from services.opportunity_store import delete_old_news, upsert_opportunities
+from services.opportunity_store import (
+    delete_old_news,
+    delete_stale_adb_opportunities,
+    upsert_opportunities,
+)
 from services.rss_service import fetch_single_feed
 from services.scraper_service import scrape_single_url
 from services.source_health import record_source_error, record_source_ok
@@ -139,8 +143,13 @@ async def run_full_ingest(trigger: str = "manual") -> Dict[str, Any]:
                     raw_items = await _fetch_one_source(feed)
                     raw_count = len(raw_items or [])
                     kept = [i for i in (raw_items or []) if matches_target_geography(i)]
-                    # Drop tenders/grants whose bid deadline is already past
-                    kept = [i for i in kept if not is_deadline_past(i)]
+                    # Drop past deadlines / decade-old ADB notices with no open deadline
+                    max_age = int(feed.get("max_posted_age_days") or 365)
+                    kept = [
+                        i
+                        for i in kept
+                        if not is_stale_posted(i, max_age_days=max_age)
+                    ]
                     kept = stamp_content_kind(kept, [feed])
                     kept = stamp_labels(kept)
                     all_items.extend(kept)
@@ -166,6 +175,14 @@ async def run_full_ingest(trigger: str = "manual") -> Dict[str, Any]:
                 news_source_ids=news_source_ids(),
                 older_than_days=NEWS_RETENTION_DAYS,
             )
+            # Remove ADB rows already in DB that are old/expired (upsert never deletes)
+            adb_max_age = {
+                f["id"]: int(f.get("max_posted_age_days") or 365)
+                for f in all_config["feeds"]
+                if (f.get("id") or "").startswith("adb-")
+                and f.get("content_kind") == "opportunity"
+            }
+            stale_deleted = await delete_stale_adb_opportunities(adb_max_age)
 
             finished = datetime.now(PKT)
             # Overall success if we finished; flag soft failure if everything errored
@@ -178,6 +195,7 @@ async def run_full_ingest(trigger: str = "manual") -> Dict[str, Any]:
                 "items": len(all_items),
                 "upserted": written,
                 "news_deleted": deleted,
+                "stale_adb_deleted": stale_deleted,
                 "sources_run": len(enabled_feeds),
                 "sources_ok": sources_ok,
                 "sources_error": sources_error,
@@ -194,7 +212,8 @@ async def run_full_ingest(trigger: str = "manual") -> Dict[str, Any]:
             await notify_ingest_webhook(_last_run)
             print(
                 f"✓ Ingest done ({trigger}): {len(all_items)} items, "
-                f"upserted={written}, errors={sources_error}, news_deleted={deleted}"
+                f"upserted={written}, errors={sources_error}, "
+                f"news_deleted={deleted}, stale_adb_deleted={stale_deleted}"
             )
             return _last_run
         except Exception as e:

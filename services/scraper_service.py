@@ -764,13 +764,14 @@ async def scrape_ungm_with_scroll(url_config: Dict[str, Any]) -> List[Dict[str, 
     """
     Scrape UNGM.org notices with browser scroll (JS-rendered role=table).
 
-    skip_keyword_filter / skip_ai_filter: keep all open notices (portal is already procurement).
+    skip_keyword_filter: only for news feeds. Opportunities always need ESG theme + PK/MENA.
     Expired deadlines are dropped when parseable.
     """
     url = url_config["url"]
     keywords = url_config.get("keywords", [])
-    # Geography always applies; skip_keyword_filter only skips climate keyword gate
-    skip_keyword = bool(url_config.get("skip_keyword_filter"))
+    # Opportunities always need ESG theme; news may skip keyword gate
+    is_news = (url_config.get("content_kind") or "") == "news"
+    skip_keyword = bool(url_config.get("skip_keyword_filter")) and is_news
     scraped_items: List[Dict[str, Any]] = []
 
     print("  Detected UNGM — browser scroll scrape...")
@@ -835,7 +836,7 @@ async def scrape_ungm_with_scroll(url_config: Dict[str, Any]) -> List[Dict[str, 
                 if deadline and len(deadline) == 10 and deadline < today:
                     continue
 
-                # Pakistan / MENA / Global only (drop other countries)
+                # Pakistan / MENA only + ESG theme (unless news skip)
                 if not matches_target_geography(item):
                     continue
 
@@ -1788,8 +1789,9 @@ async def scrape_single_url(url_config: Dict[str, Any]) -> List[Dict[str, Any]]:
             "image": main_image
         }
         
-        # Climate keywords (unless skipped) + Pakistan / MENA / Global geography
-        skip_kw = bool(url_config.get("skip_keyword_filter"))
+        # PK/MENA geography + ESG theme (keyword skip only for news)
+        is_news = (url_config.get("content_kind") or "") == "news"
+        skip_kw = bool(url_config.get("skip_keyword_filter")) and is_news
         if passes_content_filters(item, keywords, skip_keyword_filter=skip_kw):
             scraped_items.append(item)
             print(f"✓ {url_config['name']}: Found 1 relevant item")

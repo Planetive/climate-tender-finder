@@ -151,6 +151,75 @@ def is_deadline_past(item: Dict[str, Any], today: Optional[str] = None) -> bool:
     return raw < today
 
 
+def _iso_date_prefix(value: Any) -> Optional[str]:
+    """Pull YYYY-MM-DD from posted / pubDate / ISO strings. No guessing."""
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    # "2016-04-25" or "2016-04-25T00:00:00"
+    m = re.match(r"^(\d{4}-\d{2}-\d{2})", raw)
+    if m:
+        return m.group(1)
+    return None
+
+
+def item_posted_iso(item: Dict[str, Any]) -> Optional[str]:
+    """Best-known posted/invitation date for an item (ADB Date: field or pubDate)."""
+    for key in ("posted", "pubDate", "pub_date"):
+        iso = _iso_date_prefix(item.get(key))
+        if iso:
+            return iso
+    return None
+
+
+def has_open_deadline(item: Dict[str, Any], today: Optional[str] = None) -> bool:
+    """True when deadline exists and is today or later."""
+    today = today or datetime.utcnow().strftime("%Y-%m-%d")
+    raw = (item.get("deadline") or "")[:10]
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", raw):
+        return False
+    return raw >= today
+
+
+def is_stale_posted(
+    item: Dict[str, Any],
+    max_age_days: int = 365,
+    today: Optional[str] = None,
+) -> bool:
+    """
+    True when the notice is too old to be actionable.
+
+    Rules (simple, no guessing):
+    - Past bid deadline → stale (same as is_deadline_past)
+    - Open/future deadline → keep, even if posted long ago
+    - No deadline + posted older than max_age_days → stale
+      (ADB Advance Notices keep Status: Active for years; posted 2012–2016
+      must not clutter the Opportunities list)
+
+    If posted date is missing, we do NOT mark stale (avoid deleting unknowns).
+    """
+    today = today or datetime.utcnow().strftime("%Y-%m-%d")
+    if is_deadline_past(item, today=today):
+        return True
+    if has_open_deadline(item, today=today):
+        return False
+
+    posted = item_posted_iso(item)
+    if not posted:
+        return False
+
+    try:
+        posted_dt = datetime.strptime(posted, "%Y-%m-%d")
+        today_dt = datetime.strptime(today, "%Y-%m-%d")
+    except ValueError:
+        return False
+
+    age_days = (today_dt - posted_dt).days
+    return age_days > max_age_days
+
+
 async def enrich_adb_items(items: list, max_items: int = 40) -> list:
     """Enrich up to max_items ADB links (keeps ingest time reasonable)."""
     if not items:

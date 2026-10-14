@@ -17,7 +17,7 @@ export function UpcomingDeadlines() {
   useEffect(() => {
     async function loadOpportunities() {
       try {
-        const data = await fetchOpportunities(50);
+        const data = await fetchOpportunities(1000);
         setOpportunities(data);
         cacheOpportunitiesById(data);
       } catch (error) {

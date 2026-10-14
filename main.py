@@ -26,7 +26,8 @@ from services.opportunity_store import (
     get_opportunity_by_id,
     count_by_source,
 )
-from services.content_filter import matches_target_geography
+from services.adb_enrichment import is_stale_posted
+from services.content_filter import matches_esg_theme, matches_target_geography
 from services.ingest_service import (
     daily_ingest_loop,
     run_full_ingest,
@@ -42,9 +43,64 @@ from services.source_health import get_source_health
 from config.feeds import config
 
 
+def _adb_max_posted_age() -> dict:
+    """source_id → max posted age days for ADB opportunity feeds."""
+    return {
+        f["id"]: int(f.get("max_posted_age_days") or 365)
+        for f in config["feeds"]
+        if (f.get("id") or "").startswith("adb-")
+        and f.get("content_kind") == "opportunity"
+    }
+
+
+def _news_source_ids() -> set:
+    return {
+        f["id"]
+        for f in config["feeds"]
+        if f.get("content_kind") == "news"
+    }
+
+
 def _filter_target_geo(items: list) -> list:
-    """Keep only Pakistan / MENA / Global-relevant items before serve or persist."""
+    """Keep only Pakistan / MENA items (no India, Türkiye, etc.)."""
     return [i for i in items if matches_target_geography(i)]
+
+
+def _filter_esg_theme(items: list) -> list:
+    """
+    Opportunities must match ESG-advisory themes (energy, climate finance/risk, industrials).
+    News from allowlisted PK sources can pass without theme (business news retention).
+    """
+    news_ids = _news_source_ids()
+    kept = []
+    for item in items:
+        source = item.get("source") or {}
+        sid = (source.get("id") or "") if isinstance(source, dict) else ""
+        kind = item.get("content_kind") or ""
+        if kind == "news" or sid in news_ids:
+            kept.append(item)
+            continue
+        if matches_esg_theme(item):
+            kept.append(item)
+    return kept
+
+
+def _filter_stale_adb(items: list) -> list:
+    """
+    Hide ADB notices that are past deadline or posted too long ago with no open deadline.
+    Safety net so the UI stays clean even before the next DB purge/ingest.
+    """
+    max_ages = _adb_max_posted_age()
+    if not max_ages:
+        return items
+    kept = []
+    for item in items:
+        source = item.get("source") or {}
+        sid = source.get("id") if isinstance(source, dict) else ""
+        if sid in max_ages and is_stale_posted(item, max_age_days=max_ages[sid]):
+            continue
+        kept.append(item)
+    return kept
 
 
 @asynccontextmanager
@@ -114,6 +170,8 @@ async def get_feeds(
         fetch_limit = min(max(limit + offset, limit), 2000)
         db_items, db_total = await list_opportunities(limit=fetch_limit, offset=0)
         filtered = _filter_target_geo(db_items) if db_items else []
+        filtered = _filter_esg_theme(filtered)
+        filtered = _filter_stale_adb(filtered)
         page = filtered[offset:offset + limit]
         return {
             "success": True,
@@ -214,7 +272,7 @@ async def get_feeds_by_source(source_id: str):
         # Read from DB only — Sources page must stay fast
         db_items, _total = await list_opportunities(limit=2000, offset=0)
         feeds = [
-            i for i in db_items
+            i for i in _filter_stale_adb(db_items)
             if (i.get("source") or {}).get("id") == source_id
         ]
 

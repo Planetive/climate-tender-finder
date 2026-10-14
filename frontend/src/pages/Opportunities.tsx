@@ -39,8 +39,8 @@ const typeStyles = {
   News: "bg-muted text-muted-foreground",
 };
 
-/** Compact select used inside table header filter row */
-function HeaderFilterSelect({
+/** Shared filter dropdown — one style for the whole toolbar */
+function FilterSelect({
   value,
   onChange,
   placeholder,
@@ -55,15 +55,12 @@ function HeaderFilterSelect({
 }) {
   return (
     <Select value={value} onValueChange={onChange}>
-      <SelectTrigger
-        className={cn("h-8 text-xs bg-background border-border font-normal", className)}
-        onClick={(e) => e.stopPropagation()}
-      >
+      <SelectTrigger className={cn("h-9 w-[10.5rem] bg-card border-border", className)}>
         <SelectValue placeholder={placeholder} />
       </SelectTrigger>
       <SelectContent>
         {options.map((opt) => (
-          <SelectItem key={opt.value} value={opt.value} className="text-xs">
+          <SelectItem key={opt.value} value={opt.value}>
             {opt.label}
           </SelectItem>
         ))}
@@ -87,8 +84,6 @@ export default function Opportunities() {
   const [configuredSourceNames, setConfiguredSourceNames] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  // Local title filter for the table header (in addition to global search)
-  const [titleFilter, setTitleFilter] = useState("");
 
   useEffect(() => {
     async function loadOpportunities() {
@@ -141,9 +136,6 @@ export default function Opportunities() {
       opp.fundingAgency.toLowerCase().includes(q) ||
       opp.tags.some((tag) => tag.toLowerCase().includes(q));
 
-    const tq = titleFilter.toLowerCase().trim();
-    const matchesTitle = !tq || opp.title.toLowerCase().includes(tq);
-
     const matchesType = filters.type === "all" || opp.type === filters.type;
     const matchesKind =
       filters.kind === "all" ||
@@ -162,7 +154,6 @@ export default function Opportunities() {
 
     return (
       matchesSearch &&
-      matchesTitle &&
       matchesType &&
       matchesKind &&
       matchesRelevance &&
@@ -173,16 +164,9 @@ export default function Opportunities() {
     );
   });
 
-  function handleClearAll() {
-    clearFilters();
-    setTitleFilter("");
-  }
-
-  const showClear = hasActiveFilters || titleFilter.trim() !== "";
-
   return (
     <DashboardLayout>
-      <div className="space-y-6">
+      <div className="space-y-5">
         <div>
           <h1 className="text-2xl font-bold text-foreground">Opportunities</h1>
           <p className="text-muted-foreground mt-1">
@@ -190,77 +174,127 @@ export default function Opportunities() {
           </p>
         </div>
 
-        {/* Top filters */}
-        <div className="flex flex-col md:flex-row gap-4 items-start md:items-center justify-between">
-          <div className="flex flex-1 gap-3 flex-wrap">
-            <div className="relative w-full md:w-72">
+        {/* One filter toolbar — no duplicate country / title filters */}
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative w-full sm:w-64 grow sm:grow-0">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
               <Input
-                placeholder="Search opportunities..."
+                placeholder="Search title, source, country…"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-10 bg-card border-border"
+                className="pl-10 h-9 bg-card border-border"
               />
             </div>
-            <Select value={filters.kind} onValueChange={(value) => updateFilter("kind", value)}>
-              <SelectTrigger className="w-44 bg-card border-border">
-                <SelectValue placeholder="Category" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All categories</SelectItem>
-                <SelectItem value="opportunity">Grants &amp; tenders</SelectItem>
-                <SelectItem value="news">News &amp; updates</SelectItem>
-              </SelectContent>
-            </Select>
-            <Select value={filters.country} onValueChange={(value) => updateFilter("country", value)}>
-              <SelectTrigger className="w-44 bg-card border-border">
-                <SelectValue placeholder="Country" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All countries</SelectItem>
-                {uniqueCountries.map((c) => (
-                  <SelectItem key={c} value={c}>
-                    {c}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select value={filters.region} onValueChange={(value) => updateFilter("region", value)}>
-              <SelectTrigger className="w-44 bg-card border-border">
-                <SelectValue placeholder="Region" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All regions</SelectItem>
-                {uniqueRegions.map((r) => (
-                  <SelectItem key={r} value={r}>
-                    {r}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {showClear && (
-              <Button variant="ghost" size="sm" onClick={handleClearAll} className="text-muted-foreground">
+
+            <FilterSelect
+              value={filters.kind}
+              onChange={(v) => updateFilter("kind", v)}
+              placeholder="Category"
+              options={[
+                { value: "all", label: "All categories" },
+                { value: "opportunity", label: "Grants & tenders" },
+                { value: "news", label: "News & updates" },
+              ]}
+            />
+            <FilterSelect
+              value={filters.source}
+              onChange={(v) => updateFilter("source", v)}
+              placeholder="Source"
+              className="w-[12rem]"
+              options={[
+                { value: "all", label: "All sources" },
+                ...uniqueSources.map((s) => ({ value: s, label: s })),
+              ]}
+            />
+            <FilterSelect
+              value={filters.country}
+              onChange={(v) => updateFilter("country", v)}
+              placeholder="Country"
+              options={[
+                { value: "all", label: "All countries" },
+                ...uniqueCountries.map((c) => ({ value: c, label: c })),
+              ]}
+            />
+            <FilterSelect
+              value={filters.region}
+              onChange={(v) => updateFilter("region", v)}
+              placeholder="Region"
+              options={[
+                { value: "all", label: "All regions" },
+                ...uniqueRegions.map((r) => ({ value: r, label: r })),
+              ]}
+            />
+            <FilterSelect
+              value={filters.type}
+              onChange={(v) => updateFilter("type", v)}
+              placeholder="Type"
+              className="w-[8.5rem]"
+              options={[
+                { value: "all", label: "All types" },
+                { value: "Grant", label: "Grant" },
+                { value: "RFP", label: "RFP" },
+                { value: "Partnership", label: "Partnership" },
+                { value: "Tender", label: "Tender" },
+                { value: "News", label: "News" },
+              ]}
+            />
+            <FilterSelect
+              value={filters.relevance}
+              onChange={(v) => updateFilter("relevance", v)}
+              placeholder="Relevance"
+              className="w-[8.5rem]"
+              options={[
+                { value: "all", label: "All relevance" },
+                { value: "High", label: "High" },
+                { value: "Medium", label: "Medium" },
+                { value: "Low", label: "Low" },
+              ]}
+            />
+            <FilterSelect
+              value={filters.dateKind}
+              onChange={(v) => updateFilter("dateKind", v)}
+              placeholder="Date"
+              className="w-[10rem]"
+              options={[
+                { value: "all", label: "All dates" },
+                { value: "Deadline", label: "Has deadline" },
+                { value: "Published", label: "Published only" },
+              ]}
+            />
+
+            {hasActiveFilters && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={clearFilters}
+                className="h-9 text-muted-foreground"
+              >
                 <X className="w-4 h-4 mr-1" />
-                Clear filters
+                Clear
               </Button>
             )}
-          </div>
 
-          <div className="flex gap-2">
-            <Button
-              variant={viewMode === "table" ? "default" : "outline"}
-              size="icon"
-              onClick={() => setViewMode("table")}
-            >
-              <List className="w-4 h-4" />
-            </Button>
-            <Button
-              variant={viewMode === "cards" ? "default" : "outline"}
-              size="icon"
-              onClick={() => setViewMode("cards")}
-            >
-              <Grid className="w-4 h-4" />
-            </Button>
+            <div className="flex gap-1 ml-auto">
+              <Button
+                variant={viewMode === "table" ? "default" : "outline"}
+                size="icon"
+                className="h-9 w-9"
+                onClick={() => setViewMode("table")}
+                aria-label="Table view"
+              >
+                <List className="w-4 h-4" />
+              </Button>
+              <Button
+                variant={viewMode === "cards" ? "default" : "outline"}
+                size="icon"
+                className="h-9 w-9"
+                onClick={() => setViewMode("cards")}
+                aria-label="Card view"
+              >
+                <Grid className="w-4 h-4" />
+              </Button>
+            </div>
           </div>
         </div>
 
@@ -302,94 +336,14 @@ export default function Opportunities() {
                   <TableHead className="font-semibold text-foreground">Date</TableHead>
                   <TableHead className="font-semibold text-foreground">Link</TableHead>
                 </TableRow>
-                {/* Column filters in the table header */}
-                <TableRow className="bg-muted/40 hover:bg-muted/40">
-                  <TableHead className="p-2 align-top">
-                    <Input
-                      value={titleFilter}
-                      onChange={(e) => setTitleFilter(e.target.value)}
-                      placeholder="Filter title…"
-                      className="h-8 text-xs bg-background"
-                      onClick={(e) => e.stopPropagation()}
-                    />
-                  </TableHead>
-                  <TableHead className="p-2 align-top min-w-[10rem]">
-                    <HeaderFilterSelect
-                      value={filters.source}
-                      onChange={(v) => updateFilter("source", v)}
-                      placeholder="Source"
-                      className="w-full min-w-[9rem]"
-                      options={[
-                        { value: "all", label: "All sources" },
-                        ...uniqueSources.map((s) => ({ value: s, label: s })),
-                      ]}
-                    />
-                  </TableHead>
-                  <TableHead className="p-2 align-top min-w-[8rem]">
-                    <HeaderFilterSelect
-                      value={filters.country}
-                      onChange={(v) => updateFilter("country", v)}
-                      placeholder="Country"
-                      className="w-full"
-                      options={[
-                        { value: "all", label: "All" },
-                        ...uniqueCountries.map((c) => ({ value: c, label: c })),
-                      ]}
-                    />
-                  </TableHead>
-                  <TableHead className="p-2 align-top min-w-[7rem]">
-                    <HeaderFilterSelect
-                      value={filters.type}
-                      onChange={(v) => updateFilter("type", v)}
-                      placeholder="Type"
-                      className="w-full"
-                      options={[
-                        { value: "all", label: "All" },
-                        { value: "Grant", label: "Grant" },
-                        { value: "RFP", label: "RFP" },
-                        { value: "Partnership", label: "Partnership" },
-                        { value: "Tender", label: "Tender" },
-                        { value: "News", label: "News" },
-                      ]}
-                    />
-                  </TableHead>
-                  <TableHead className="p-2 align-top min-w-[7rem]">
-                    <HeaderFilterSelect
-                      value={filters.relevance}
-                      onChange={(v) => updateFilter("relevance", v)}
-                      placeholder="Relevance"
-                      className="w-full"
-                      options={[
-                        { value: "all", label: "All" },
-                        { value: "High", label: "High" },
-                        { value: "Medium", label: "Medium" },
-                        { value: "Low", label: "Low" },
-                      ]}
-                    />
-                  </TableHead>
-                  <TableHead className="p-2 align-top min-w-[8rem]">
-                    <HeaderFilterSelect
-                      value={filters.dateKind}
-                      onChange={(v) => updateFilter("dateKind", v)}
-                      placeholder="Date"
-                      className="w-full"
-                      options={[
-                        { value: "all", label: "All dates" },
-                        { value: "Deadline", label: "Has deadline" },
-                        { value: "Published", label: "Published only" },
-                      ]}
-                    />
-                  </TableHead>
-                  <TableHead className="p-2" />
-                </TableRow>
               </TableHeader>
               <TableBody>
                 {filteredOpportunities.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={7} className="text-center text-muted-foreground py-10">
                       No opportunities match these filters.
-                      {showClear && (
-                        <Button variant="link" onClick={handleClearAll} className="ml-1">
+                      {hasActiveFilters && (
+                        <Button variant="link" onClick={clearFilters} className="ml-1">
                           Clear filters
                         </Button>
                       )}

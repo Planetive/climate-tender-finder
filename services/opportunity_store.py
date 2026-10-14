@@ -302,6 +302,96 @@ async def count_by_source() -> Dict[str, int]:
         return {}
 
 
+async def delete_ids(ids: List[str]) -> int:
+    """Delete opportunity rows by id list. Returns deleted count."""
+    if not ids or not _supabase_configured():
+        return 0
+
+    url = f"{_rest_base()}/opportunities"
+    deleted = 0
+    chunk_size = 50
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            for i in range(0, len(ids), chunk_size):
+                chunk = ids[i : i + chunk_size]
+                ids_csv = ",".join(chunk)
+                response = await client.delete(
+                    url,
+                    headers=_headers(prefer="return=representation"),
+                    params={"id": f"in.({ids_csv})"},
+                )
+                if response.status_code >= 400:
+                    print(
+                        f"⚠ Supabase delete_ids failed ({response.status_code}): "
+                        f"{response.text[:300]}"
+                    )
+                    return deleted
+                rows = response.json() if response.content else []
+                deleted += len(rows) if isinstance(rows, list) else 0
+        return deleted
+    except Exception as e:
+        print(f"⚠ Supabase delete_ids error: {e}")
+        return deleted
+
+
+async def delete_stale_adb_opportunities(
+    source_max_age: Dict[str, int],
+) -> int:
+    """
+    Remove ADB opportunity rows that are past deadline or too old without an open deadline.
+
+    Why: FeedBurner still serves Advance Notices from 2012–2016 as Status: Active.
+    Upsert alone never removes them — we must delete stale rows from Supabase.
+    """
+    if not source_max_age or not _supabase_configured():
+        return 0
+
+    from services.adb_enrichment import is_stale_posted
+
+    source_ids = list(source_max_age.keys())
+    ids_csv = ",".join(source_ids)
+    url = f"{_rest_base()}/opportunities"
+    params = {
+        "select": "*",
+        "source_id": f"in.({ids_csv})",
+        "limit": "5000",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.get(url, headers=_headers(), params=params)
+            if response.status_code >= 400:
+                print(
+                    f"⚠ Stale ADB list failed ({response.status_code}): "
+                    f"{response.text[:300]}"
+                )
+                return 0
+            rows = response.json()
+            if not isinstance(rows, list):
+                return 0
+
+        to_delete: List[str] = []
+        for row in rows:
+            item = row_to_item(row)
+            sid = row.get("source_id") or ""
+            max_age = int(source_max_age.get(sid, 365))
+            if is_stale_posted(item, max_age_days=max_age):
+                oid = row.get("id")
+                if oid:
+                    to_delete.append(str(oid))
+
+        if not to_delete:
+            print("✓ No stale ADB opportunities to purge")
+            return 0
+
+        deleted = await delete_ids(to_delete)
+        print(f"✓ Purged {deleted} stale ADB opportunities (old posted / past deadline)")
+        return deleted
+    except Exception as e:
+        print(f"⚠ Stale ADB purge error: {e}")
+        return 0
+
+
 async def delete_old_news(
     news_source_ids: List[str],
     older_than_days: int = 3,

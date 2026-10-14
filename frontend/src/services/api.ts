@@ -99,6 +99,8 @@ export interface Opportunity {
   deadlineDate: Date;
   /** ISO or display-friendly published/posted date when we have one */
   published: string;
+  /** Parsed published/posted date for KPI math (invalid → epoch) */
+  publishedDate: Date;
   /** What the list/detail date field means */
   dateLabel: "Deadline" | "Published" | "Posted";
   /** Best date to show the user (deadline if present, else published) */
@@ -145,6 +147,8 @@ function transformFeedToOpportunity(item: BackendFeedItem): Opportunity {
 
   const publishedRaw = item.posted || item.pubDate || "";
   const published = publishedRaw ? formatPubDateForDisplay(publishedRaw) : "";
+  // Real calendar date for "new this week" KPIs — never invent a far-future date
+  const publishedDate = parsePublishedDate(publishedRaw);
 
   const hasRealDeadline =
     Boolean(item.deadline) ||
@@ -159,7 +163,7 @@ function transformFeedToOpportunity(item: BackendFeedItem): Opportunity {
     dateLabel = item.posted ? "Posted" : "Published";
     dateDisplay = published;
     // Keep deadlineDate aligned to published for sorting when no deadline
-    deadlineDate = parseDeadlineDate(publishedRaw.slice(0, 10) || published);
+    deadlineDate = publishedDate.getTime() > 0 ? publishedDate : parseDeadlineDate(published);
   } else {
     dateLabel = "Published";
     dateDisplay = "Not specified";
@@ -213,6 +217,7 @@ function transformFeedToOpportunity(item: BackendFeedItem): Opportunity {
     deadline: hasRealDeadline ? deadline : "Not specified",
     deadlineDate,
     published: published || "Not specified",
+    publishedDate,
     dateLabel,
     dateDisplay,
     fundingAgency,
@@ -258,8 +263,11 @@ function extractCountry(item: BackendFeedItem): string {
   if (text.includes('nepal')) return 'Nepal';
   if (text.includes('afghanistan')) return 'Afghanistan';
   
-  // Check for MENA countries
-  const menaCountries = ['uae', 'saudi arabia', 'egypt', 'jordan', 'lebanon', 'morocco', 'tunisia', 'algeria', 'azerbaijan', 'georgia', 'turkey', 'türkiye'];
+  // MENA only (Türkiye / Azerbaijan / Georgia are out of scope for this product)
+  const menaCountries = [
+    'uae', 'saudi arabia', 'egypt', 'jordan', 'lebanon', 'morocco', 'tunisia',
+    'algeria', 'iraq', 'qatar', 'bahrain', 'kuwait', 'oman', 'yemen',
+  ];
   for (const country of menaCountries) {
     if (text.includes(country)) {
       return country.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
@@ -289,8 +297,7 @@ function extractRegion(item: BackendFeedItem, country: string): string {
 
   const mena = [
     'uae', 'saudi arabia', 'egypt', 'jordan', 'lebanon', 'morocco', 'tunisia',
-    'algeria', 'azerbaijan', 'georgia', 'turkey', 'türkiye', 'iraq', 'qatar',
-    'bahrain', 'kuwait', 'oman', 'yemen', 'mena region',
+    'algeria', 'iraq', 'qatar', 'bahrain', 'kuwait', 'oman', 'yemen', 'mena region',
   ];
   if (c.includes('mena') || mena.includes(c)) {
     return 'Middle East & North Africa';
@@ -375,18 +382,24 @@ function inferOpportunityType(item: BackendFeedItem): "Grant" | "RFP" | "Partner
 function inferRelevance(item: BackendFeedItem): "High" | "Medium" | "Low" {
   const text = `${item.title} ${item.description} ${item.content}`.toLowerCase();
   
-  // High relevance keywords
-  const highKeywords = ['pakistan', 'mena', 'climate finance', 'esg', 'carbon market', 'mrv', 'adaptation', 'mitigation'];
+  // High: ESG advisory themes + industrial clients (oil/gas, chemicals, steel, …)
+  const highKeywords = [
+    'pakistan', 'mena', 'climate finance', 'climate risk', 'esg', 'carbon market',
+    'mrv', 'net zero', 'energy transition', 'oil', 'gas', 'petroleum', 'chemical',
+    'steel', 'cement', 'plastic', 'paper',
+  ];
   if (highKeywords.some(keyword => text.includes(keyword))) {
     return 'High';
   }
-  
-  // Medium relevance keywords
-  const mediumKeywords = ['sustainability', 'renewable energy', 'clean energy', 'green'];
+
+  const mediumKeywords = [
+    'sustainability', 'renewable', 'clean energy', 'climate', 'energy', 'carbon',
+    'adaptation', 'mitigation', 'emission',
+  ];
   if (mediumKeywords.some(keyword => text.includes(keyword))) {
     return 'Medium';
   }
-  
+
   return 'Low';
 }
 
@@ -479,6 +492,25 @@ function parseDeadlineDate(deadline: string): Date {
   return new Date('2099-12-31');
 }
 
+/** Parse posted/pubDate for KPI "new this week" — returns Invalid Date epoch if unknown */
+function parsePublishedDate(raw: string): Date {
+  if (!raw || /^not specified$/i.test(raw.trim())) {
+    return new Date(0);
+  }
+  try {
+    const iso = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (iso) {
+      const d = new Date(iso[1] + "T00:00:00");
+      if (!isNaN(d.getTime())) return d;
+    }
+    const d = new Date(raw);
+    if (!isNaN(d.getTime())) return d;
+  } catch {
+    // fall through
+  }
+  return new Date(0);
+}
+
 /**
  * Infer required action based on opportunity type
  */
@@ -534,6 +566,9 @@ export function getCachedOpportunity(id: string): Opportunity | null {
     // Revive Date if it was serialized
     if (hit.deadlineDate && typeof hit.deadlineDate === "string") {
       hit.deadlineDate = new Date(hit.deadlineDate);
+    }
+    if (hit.publishedDate && typeof hit.publishedDate === "string") {
+      hit.publishedDate = new Date(hit.publishedDate);
     }
     return hit;
   } catch {

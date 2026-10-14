@@ -432,27 +432,34 @@ async def fetch_single_feed(feed_config: Dict[str, Any]) -> List[Dict[str, Any]]
             for item in feed.entries
         ]
 
-        # skip_keyword_filter = skip climate keywords only; geography (PK/MENA/Global) always applies
+        # Geography: PK/MENA only. Theme: ESG advisory (skip keywords only for news feeds).
         keywords = feed_config.get("keywords", [])
-        skip_kw = bool(feed_config.get("skip_keyword_filter"))
+        is_news = (feed_config.get("content_kind") or "") == "news"
+        skip_kw = bool(feed_config.get("skip_keyword_filter")) and is_news
         relevant_items = [
             item
             for item in processed_items
             if passes_content_filters(item, keywords, skip_keyword_filter=skip_kw)
         ]
 
-        # ADB tender feeds: pull real bid deadline from IFB PDF/HTML, drop expired
+        # ADB tender feeds: pull real bid deadline from IFB PDF/HTML;
+        # drop past deadlines and decade-old notices with no open deadline
         source_id = (feed_config.get("id") or "").lower()
         if source_id.startswith("adb-") and feed_config.get("content_kind") == "opportunity":
-            from services.adb_enrichment import enrich_adb_items, is_deadline_past
+            from services.adb_enrichment import enrich_adb_items, is_stale_posted
 
+            max_age = int(feed_config.get("max_posted_age_days", 365))
             print(f"  Enriching ADB deadlines from linked IFB documents ({len(relevant_items)} items)...")
             relevant_items = await enrich_adb_items(relevant_items)
             before = len(relevant_items)
-            relevant_items = [i for i in relevant_items if not is_deadline_past(i)]
+            relevant_items = [
+                i for i in relevant_items if not is_stale_posted(i, max_age_days=max_age)
+            ]
             dropped = before - len(relevant_items)
             if dropped:
-                print(f"  Dropped {dropped} ADB items with past bid deadlines")
+                print(
+                    f"  Dropped {dropped} ADB items (past deadline or posted > {max_age} days ago)"
+                )
             with_deadline = sum(1 for i in relevant_items if i.get("deadline"))
             print(f"  ADB deadlines found: {with_deadline}/{len(relevant_items)}")
 

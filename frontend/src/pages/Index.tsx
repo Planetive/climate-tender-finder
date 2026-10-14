@@ -7,54 +7,79 @@ import { RecentAlerts } from "@/components/dashboard/RecentAlerts";
 import { UpcomingDeadlines } from "@/components/dashboard/UpcomingDeadlines";
 import { useNavigate } from "react-router-dom";
 import { differenceInDays, isAfter, subDays } from "date-fns";
-import { fetchOpportunities, fetchSources, type Opportunity } from "@/services/api";
+import {
+  cacheOpportunitiesById,
+  fetchOpportunities,
+  fetchSources,
+  type Opportunity,
+} from "@/services/api";
 
 const Index = () => {
   const navigate = useNavigate();
   const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
   const [sources, setSources] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  
-  // Fetch data from API when component mounts
+
   useEffect(() => {
     async function loadData() {
       try {
         setLoading(true);
+        // Load full set so KPI cards are real totals (not capped at 50)
         const [opps, srcs] = await Promise.all([
-          fetchOpportunities(50),
-          fetchSources()
+          fetchOpportunities(1000),
+          fetchSources(),
         ]);
         setOpportunities(opps);
+        cacheOpportunitiesById(opps);
         setSources(srcs);
       } catch (error) {
-        console.error('Error loading dashboard data:', error);
+        console.error("Error loading dashboard data:", error);
       } finally {
         setLoading(false);
       }
     }
     loadData();
   }, []);
-  
+
   const today = new Date();
   const sevenDaysAgo = subDays(today, 7);
-  
-  // Dynamic stats calculations
-  const newOpportunities = opportunities.filter(
-    (o) => isAfter(o.deadlineDate, sevenDaysAgo)
+
+  // Grants/tenders only for opportunity KPIs (news is separate retention)
+  const grantTenders = opportunities.filter((o) => o.contentKind !== "news");
+
+  // "New" = published/posted in the last 7 days (NOT deadline — that was the 50 bug)
+  const newOpportunities = grantTenders.filter((o) => {
+    const pub = o.publishedDate;
+    if (!pub || pub.getTime() <= 0) return false;
+    return isAfter(pub, sevenDaysAgo) && !isAfter(pub, today);
+  }).length;
+
+  const highRelevance = grantTenders.filter((o) => o.relevance === "High").length;
+
+  const upcomingDeadlines = grantTenders.filter(
+    (o) =>
+      o.dateLabel === "Deadline" &&
+      o.deadline !== "Not specified" &&
+      isAfter(o.deadlineDate, today) &&
+      o.deadlineDate.getFullYear() < 2090 &&
+      differenceInDays(o.deadlineDate, today) <= 30
   ).length;
-  
-  const highRelevance = opportunities.filter((o) => o.relevance === "High").length;
-  
-  const upcomingDeadlines = opportunities.filter(
-    (o) => isAfter(o.deadlineDate, today) && differenceInDays(o.deadlineDate, today) <= 30
-  ).length;
-  
-  const recentOpportunities = opportunities.slice(0, 4);
+
+  const activeSources = sources.filter((s) => s.enabled !== false).length;
+
+  // Dashboard list: High relevance first (newest among High), not random "recent"
+  const highRelevanceList = [...grantTenders]
+    .filter((o) => o.relevance === "High")
+    .sort((a, b) => {
+      const ta = a.publishedDate?.getTime?.() || a.deadlineDate?.getTime?.() || 0;
+      const tb = b.publishedDate?.getTime?.() || b.deadlineDate?.getTime?.() || 0;
+      return tb - ta;
+    })
+    .slice(0, 6);
 
   return (
     <DashboardLayout>
       <div className="space-y-6">
-        {/* Page Header */}
         <div>
           <h1 className="text-2xl font-bold text-foreground">Dashboard</h1>
           <p className="text-muted-foreground mt-1">
@@ -62,43 +87,40 @@ const Index = () => {
           </p>
         </div>
 
-        {/* Stats Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <StatCard
             title="New Opportunities"
-            value={newOpportunities}
+            value={loading ? "—" : newOpportunities}
             icon={FileSearch}
-            trend="Last 7 days"
+            trend="Posted in last 7 days"
           />
           <StatCard
             title="High Relevance"
-            value={highRelevance}
+            value={loading ? "—" : highRelevance}
             icon={Sparkles}
-            trend="Total available"
+            trend="ESG / energy / climate focus"
           />
           <StatCard
             title="Upcoming Deadlines"
-            value={upcomingDeadlines}
+            value={loading ? "—" : upcomingDeadlines}
             icon={Clock}
             trend="Next 30 days"
           />
           <StatCard
             title="Active Sources"
-            value={loading ? 0 : sources.length}
+            value={loading ? "—" : activeSources}
             icon={Database}
-            trend="Monitoring today"
+            trend={`${sources.length} configured`}
           />
         </div>
 
-        {/* Main Content Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Opportunities Section */}
           <div className="lg:col-span-2 space-y-4">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold text-foreground">
-                Recent Opportunities
+                High Relevance Opportunities
               </h2>
-              <button 
+              <button
                 onClick={() => navigate("/opportunities")}
                 className="text-sm text-primary hover:underline"
               >
@@ -109,36 +131,35 @@ const Index = () => {
               <div className="text-center py-8 text-muted-foreground">
                 Loading opportunities...
               </div>
-            ) : recentOpportunities.length === 0 ? (
+            ) : highRelevanceList.length === 0 ? (
               <div className="text-center py-8 text-muted-foreground">
-                No opportunities found. Make sure the backend is running.
+                No high-relevance opportunities yet. Run a scrape or check Sources.
               </div>
             ) : (
-            <div className="grid gap-4">
-              {recentOpportunities.map((opportunity) => (
-                <OpportunityCard
-                  key={opportunity.id}
-                  title={opportunity.title}
-                  source={opportunity.source}
-                  country={opportunity.country}
-                  type={opportunity.type}
-                  relevance={opportunity.relevance}
-                  deadline={opportunity.dateDisplay || opportunity.deadline}
-                  dateLabel={opportunity.dateLabel}
-                  contentKind={opportunity.contentKind}
-                  link={opportunity.link}
-                  onClick={() =>
-                    navigate(`/opportunities/${opportunity.id}`, {
-                      state: { opportunity },
-                    })
-                  }
-                />
-              ))}
-            </div>
+              <div className="grid gap-4">
+                {highRelevanceList.map((opportunity) => (
+                  <OpportunityCard
+                    key={opportunity.id}
+                    title={opportunity.title}
+                    source={opportunity.source}
+                    country={opportunity.country}
+                    type={opportunity.type}
+                    relevance={opportunity.relevance}
+                    deadline={opportunity.dateDisplay || opportunity.deadline}
+                    dateLabel={opportunity.dateLabel}
+                    contentKind={opportunity.contentKind}
+                    link={opportunity.link}
+                    onClick={() =>
+                      navigate(`/opportunities/${opportunity.id}`, {
+                        state: { opportunity },
+                      })
+                    }
+                  />
+                ))}
+              </div>
             )}
           </div>
 
-          {/* Sidebar Widgets */}
           <div className="space-y-6">
             <RecentAlerts />
             <UpcomingDeadlines />

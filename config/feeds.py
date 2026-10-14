@@ -6,6 +6,10 @@ Set "type": "rss" for RSS feeds, "type": "scrape" for websites to scrape
 content_kind:
   - "news"         → kept 3 days, then deleted by the daily job
   - "opportunity"  → grants/tenders/procurement — kept (not auto-deleted)
+
+Geography: Pakistan + MENA only (not India, Türkiye, etc.).
+Theme (opportunities): ESG advisory — energy, climate finance/risk, ESG,
+industrials (oil & gas, chemicals, paper, plastics, steel, …).
 """
 
 config = {
@@ -33,6 +37,8 @@ config = {
             "name": "ADB - Invitation for Bids",
             "type": "rss",
             "content_kind": "opportunity",
+            # Drop notices posted > 1 year ago unless they still have an open bid deadline
+            "max_posted_age_days": 365,
             "url": "https://feeds.feedburner.com/adb-invitation-for-bids",
             "description": "Active ADB invitation-for-bids / tender notices (works, goods, and related procurement) with project, country, sector, and status metadata",
             "keywords": ["asia", "pacific", "adb", "tender", "invitation for bids", "procurement", "bid", "icb", "ncb", "energy", "climate", "water", "infrastructure"]
@@ -42,6 +48,8 @@ config = {
             "name": "ADB - Advance Contracting Notices",
             "type": "rss",
             "content_kind": "opportunity",
+            # ADB leaves Status: Active for years; 6 months without a deadline = not actionable
+            "max_posted_age_days": 180,
             "url": "https://feeds.feedburner.com/adb-advanced-notices",
             "description": "ADB advance contracting and early market engagement notices for upcoming projects and procurements",
             "keywords": ["asia", "pacific", "adb", "advance notice", "early market engagement", "procurement", "tender", "contracting"]
@@ -51,6 +59,7 @@ config = {
             "name": "ADB - Consulting Services Recruitment Notices",
             "type": "rss",
             "content_kind": "opportunity",
+            "max_posted_age_days": 365,
             "url": "https://feeds.feedburner.com/adb-csrn",
             "description": "ADB consulting services recruitment notices (CSRN) for individual consultants and firms on ADB-financed projects",
             "keywords": ["asia", "pacific", "adb", "csrn", "consultant", "consulting", "recruitment", "procurement", "energy", "climate", "environment"]
