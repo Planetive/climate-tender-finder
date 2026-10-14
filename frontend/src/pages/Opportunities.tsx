@@ -248,7 +248,7 @@ export default function Opportunities() {
                       navigate(`/opportunities/${opp.id}`, { state: { opportunity: opp } })
                     }
                   >
-                    <TableCell className="font-medium text-foreground max-w-xs truncate">
+                    <TableCell className="font-medium text-foreground min-w-[18rem] max-w-xl whitespace-normal break-words leading-snug">
                       {opp.title}
                     </TableCell>
                     <TableCell className="text-muted-foreground">{opp.source}</TableCell>

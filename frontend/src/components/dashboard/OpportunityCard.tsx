@@ -68,7 +68,7 @@ export function OpportunityCard({
       <CardContent className="p-5">
         <div className="space-y-3">
           <div className="flex items-start justify-between gap-3">
-            <h3 className="font-medium text-foreground line-clamp-2 flex-1">
+            <h3 className="font-medium text-foreground flex-1 whitespace-normal break-words leading-snug">
               {title}
             </h3>
             {contentKind === "news" ? (
