@@ -307,8 +307,8 @@ async def fetch_paginated_wordpress_rss(feed_config: Dict[str, Any]) -> List[Dic
     """
     base_url = feed_config["url"]
     max_pages = int(feed_config.get("max_pages", 20))
-    # News default: today + yesterday (2). Do not use this path for grants/tenders.
-    max_age_days = int(feed_config.get("max_age_days", 2))
+    # News default: rolling lookback (7). Do not use this path for grants/tenders.
+    max_age_days = int(feed_config.get("max_age_days", 7))
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(days=max_age_days)
 

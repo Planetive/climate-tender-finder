@@ -96,7 +96,7 @@ def _filter_esg_theme(items: list) -> list:
 
 def _filter_fresh_news(items: list) -> list:
     """
-    News: hide anything older than today + yesterday.
+    News: hide anything older than NEWS_LOOKBACK_DAYS.
     Grants/tenders are left alone.
     """
     news_ids = _news_source_ids()

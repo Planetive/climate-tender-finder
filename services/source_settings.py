@@ -71,6 +71,10 @@ def source_category(feed: Dict[str, Any]) -> str:
     if kind == "news":
         if "propakistani" in sid:
             return "Pakistan Business News"
+        if "arab-news" in sid:
+            return "MENA Business News"
+        if "khaleej" in sid:
+            return "MENA Business News"
         if "unep" in sid or "un " in name:
             return "UN News"
         if "adb" in sid:

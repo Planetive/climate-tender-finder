@@ -43,6 +43,8 @@ interface BackendFeedItem {
   opportunity_type?: string;
   content_kind?: string;
   relevance?: string;
+  /** Gemini summary for priority business-news sources (stored in extra) */
+  ai_summary?: string;
 }
 
 interface BackendSource {
@@ -175,8 +177,15 @@ function transformFeedToOpportunity(item: BackendFeedItem): Opportunity {
   // Use categories as tags
   const tags = item.categories.length > 0 ? item.categories : ['Climate', 'Funding'];
   
-  // Use description or content as summary
-  let summary = item.description || item.content?.substring(0, 300) || 'No description available.';
+  // Prefer Gemini summary when present (priority business-news sources)
+  const aiSummary = (item.ai_summary || "").trim();
+  let summary =
+    (aiSummary && !aiSummary.toLowerCase().startsWith("summary error")
+      ? aiSummary
+      : null) ||
+    item.description ||
+    item.content?.substring(0, 300) ||
+    "No description available.";
   // Prefer structured UNDP fields in summary when present
   if (item.reference_number || item.development_area) {
     summary = [

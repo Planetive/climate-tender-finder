@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 try:
     from config.feeds import NEWS_LOOKBACK_DAYS
 except Exception:
-    NEWS_LOOKBACK_DAYS = 2
+    NEWS_LOOKBACK_DAYS = 7
 
 # --- Geography: Pakistan + MENA only -----------------------------------------
 
@@ -47,6 +47,11 @@ PAKISTAN_SOURCE_IDS = {
     "propakistani-business",
     "undp-pakistan-procurement",
     "secp-notifications",
+}
+# MENA business news (example crawlers) — keep whole feed without per-article geo guess
+MENA_BUSINESS_NEWS_SOURCE_IDS = {
+    "arab-news-economy",
+    "khaleej-times-business",
 }
 # GCF is climate finance by definition — keep even when country says Global
 GLOBAL_CLIMATE_SOURCE_IDS = {
@@ -172,15 +177,15 @@ def is_news_too_old(
     today: Optional[str] = None,
 ) -> bool:
     """
-    News only: True when publish/posted date is older than today + yesterday.
+    News only: True when publish/posted date is older than the lookback window.
 
-    Example: if today is 2026-10-10, keep 2026-10-10 and 2026-10-09; drop 2026-10-08+.
+    Example: lookback_days=7 keeps today and the previous 6 days.
     Grants/tenders must NOT call this — they use deadline / max_posted_age instead.
     Missing date → not dropped (avoid deleting unknowns).
     """
     from services.adb_enrichment import item_posted_iso
 
-    lookback_days = max(1, int(lookback_days or 2))
+    lookback_days = max(1, int(lookback_days or NEWS_LOOKBACK_DAYS or 7))
     today_s = today or datetime.utcnow().strftime("%Y-%m-%d")
     posted = item_posted_iso(item)
     if not posted:
@@ -202,7 +207,11 @@ def matches_target_geography(item: Dict[str, Any]) -> bool:
     Broad "global/international" wording used to let those through — removed.
     """
     sid = _source_id(item)
-    if sid in PAKISTAN_SOURCE_IDS or sid in GLOBAL_CLIMATE_SOURCE_IDS:
+    if (
+        sid in PAKISTAN_SOURCE_IDS
+        or sid in MENA_BUSINESS_NEWS_SOURCE_IDS
+        or sid in GLOBAL_CLIMATE_SOURCE_IDS
+    ):
         return True
 
     if is_out_of_scope_country(item):

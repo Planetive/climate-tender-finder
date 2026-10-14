@@ -4,7 +4,7 @@ Add your RSS feed URLs and scraping URLs here
 Set "type": "rss" for RSS feeds, "type": "scrape" for websites to scrape
 
 content_kind:
-  - "news"         → only today + yesterday (publish date); purged from DB after 2 days
+  - "news"         → last NEWS_LOOKBACK_DAYS by publish date; purged from DB after that window
   - "opportunity"  → grants/tenders/procurement — longer windows; not auto-deleted by news purge
 
 Geography: Pakistan + MENA only (not India, Türkiye, etc.).
@@ -12,9 +12,9 @@ Theme (opportunities): ESG advisory — energy, climate finance/risk, ESG,
 industrials (oil & gas, chemicals, paper, plastics, steel, …).
 """
 
-# News only: keep articles from today and yesterday (e.g. Oct 10 → Oct 10 + Oct 9).
+# News only: rolling window (daily ingest keeps last 7 days stored).
 # Grants/tenders do NOT use this — they keep their own deadline / max_posted_age rules.
-NEWS_LOOKBACK_DAYS = 2
+NEWS_LOOKBACK_DAYS = 7
 
 config = {
     "feeds": [
@@ -23,7 +23,7 @@ config = {
             "name": "Asian Development Bank - Blogs",
             "type": "rss",
             "content_kind": "news",
-            "max_age_days": 2,
+            "max_age_days": 7,
             "url": "https://feeds.feedburner.com/adb_blogs",
             "description": "Asian Development Bank blog posts on development in Asia and the Pacific, covering climate, sustainability, energy, and regional development",
             "keywords": ["asia", "pacific", "development", "adb"]
@@ -33,7 +33,7 @@ config = {
             "name": "ADB - News",
             "type": "rss",
             "content_kind": "news",
-            "max_age_days": 2,
+            "max_age_days": 7,
             "url": "https://feeds.feedburner.com/adb_news",
             "description": "Asian Development Bank news releases on funding, projects, and initiatives related to climate, sustainability, energy, and development in Asia and the Pacific",
             "keywords": ["asia", "pacific", "development", "adb", "news", "funding", "grants"]
@@ -95,7 +95,7 @@ config = {
             ),
             "description": "World Bank Press Releases filtered like the All News page (energy/climate/finance topics; South Asia, ECA, MENAAP).",
             "keywords": ["world bank", "climate", "energy", "pakistan", "sustainability"],
-            "max_age_days": 2,
+            "max_age_days": 7,
             "api_rows": 30,
             "skip_keyword_filter": True,
             "wb_display_type": "Press Release",
@@ -134,7 +134,7 @@ config = {
             "type": "rss",
             "content_kind": "news",
             "enabled": True,
-            "max_age_days": 2,
+            "max_age_days": 7,
             "url": "https://www.climatechangenews.com/feed/",
             "description": "Climate/environment news via Climate Home News (replaces expired EIN News). PK/MENA geo filter still applies.",
             "keywords": ["environment", "climate", "energy", "finance", "pakistan", "mena", "sustainability"],
@@ -147,7 +147,7 @@ config = {
             "type": "rss",
             "content_kind": "news",
             "enabled": True,
-            "max_age_days": 2,
+            "max_age_days": 7,
             "url": "https://www.theguardian.com/environment/climate-change/rss",
             "description": "Guardian Climate Change RSS (replaces expired EIN Global Warming feed). PK/MENA geo filter still applies.",
             "keywords": ["climate", "global warming", "environment", "energy", "emissions", "pakistan", "mena"],
@@ -160,7 +160,7 @@ config = {
             "type": "scrape",
             "content_kind": "news",
             "enabled": True,
-            "max_age_days": 2,
+            "max_age_days": 7,
             "url": "https://www.worldbank.org/en/topic/energy",
             "description": "World Bank energy Press Releases via search API (blog RSS 404). Same region filters as World Bank News.",
             "keywords": ["world bank", "energy", "renewable", "solar", "climate", "pakistan", "mena"],
@@ -208,7 +208,7 @@ config = {
             "name": "UNEP - News and Stories",
             "type": "rss",
             "content_kind": "news",
-            "max_age_days": 2,
+            "max_age_days": 7,
             "url": "https://www.unep.org/news-and-stories/rss.xml",
             "description": "United Nations Environment Programme news, stories, press releases, and updates on climate change, biodiversity, pollution, and environmental protection",
             "keywords": ["unep", "united nations", "environment", "climate", "biodiversity", "pollution", "sustainability", "conservation", "ecosystem", "green"]
@@ -240,13 +240,40 @@ config = {
             "name": "ProPakistani - Business News",
             "type": "rss",
             "content_kind": "news",
+            "crawler": "business_news",
             "url": "https://propakistani.pk/category/business/feed/",
-            "description": "ProPakistani business news via WordPress RSS (paginated). Only today + yesterday.",
+            "description": "ProPakistani business news via WordPress RSS (paginated, last 7 days). Gemini summary priority.",
             "keywords": [],
-            "max_age_days": 2,
-            "max_pages": 20,
+            "max_age_days": 7,
+            "max_pages": 50,
             "skip_ai_filter": True,
-            "skip_keyword_filter": True
+            "skip_keyword_filter": True,
+        },
+        {
+            "id": "arab-news-economy",
+            "name": "Arab News - Economy",
+            "type": "scrape",
+            "content_kind": "news",
+            "crawler": "business_news",
+            "url": "https://www.arabnews.com/economy",
+            "description": "Arab News economy/business archive (last 7 days). Same crawler as weekly example; Gemini runs first for this trio.",
+            "keywords": [],
+            "max_age_days": 7,
+            "skip_ai_filter": True,
+            "skip_keyword_filter": True,
+        },
+        {
+            "id": "khaleej-times-business",
+            "name": "Khaleej Times - Business",
+            "type": "scrape",
+            "content_kind": "news",
+            "crawler": "business_news",
+            "url": "https://www.khaleejtimes.com/business",
+            "description": "Khaleej Times Business via searchadvancestories API (last 7 days). Same as weekly example; Gemini runs first for this trio.",
+            "keywords": [],
+            "max_age_days": 7,
+            "skip_ai_filter": True,
+            "skip_keyword_filter": True,
         },
         {
             "id": "undp-pakistan-procurement",
@@ -285,7 +312,7 @@ config = {
 
 
 def news_source_ids() -> list:
-    """Source ids marked as news (today + yesterday only)."""
+    """Source ids marked as news (last NEWS_LOOKBACK_DAYS)."""
     return [f["id"] for f in config["feeds"] if f.get("content_kind") == "news"]
 
 

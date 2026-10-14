@@ -4,7 +4,11 @@ feedparser>=6.0.10
 python-multipart>=0.0.12
 pydantic>=2.10.0
 httpx>=0.27.0
+requests>=2.31.0
+python-dateutil>=2.8.0
 crawl4ai>=0.3.0
 beautifulsoup4>=4.12.0
 # Read ADB Invitation-for-Bids PDFs to extract real bid deadlines (RSS only has posted Date)
 pypdf>=5.0.0
+# Gemini summaries for priority business-news sources (same SDK as example script)
+google-genai>=1.0.0

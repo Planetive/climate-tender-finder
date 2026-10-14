@@ -4,7 +4,7 @@ Daily ingest + news retention + per-source health.
 - Runs once per day at 07:00 Asia/Karachi (Pakistan time)
 - On API startup: catch-up if today's 07:00 PKT run was missed
 - Manual re-run via POST /api/feeds/refresh
-- News: only today + yesterday by publish date; purged from DB after NEWS_RETENTION_DAYS
+- News: last NEWS_LOOKBACK_DAYS by publish date; purged from DB after NEWS_RETENTION_DAYS
 - Opportunities (grants/tenders): unchanged longer windows
 """
 import asyncio
@@ -13,8 +13,14 @@ from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
 from config.feeds import NEWS_LOOKBACK_DAYS, config as all_config, news_source_ids, stamp_content_kind
+from services.business_news_crawlers import (
+    BUSINESS_NEWS_SOURCE_IDS,
+    fetch_business_news_source,
+    is_business_news_source,
+)
 from services.cache_service import get_cache_key, set_cached_data
 from services.content_filter import is_news_too_old, matches_target_geography
+from services.gemini_summary import attach_gemini_summaries_async
 from services.ingest_status import load_ingest_status, notify_ingest_webhook, save_ingest_status
 from services.adb_enrichment import is_stale_posted
 from services.labeling import stamp_labels
@@ -28,8 +34,23 @@ from services.scraper_service import scrape_single_url
 from services.source_health import record_source_error, record_source_ok
 from services.source_settings import get_enabled_feed_configs
 
+
+def _ingest_feed_sort_key(feed: Dict[str, Any]) -> tuple:
+    """
+    Run order: priority business-news (example 3) first, then other news,
+    then opportunities. Gemini summaries follow the same order so the
+    three finish before other news burn quota.
+    """
+    sid = feed.get("id") or ""
+    kind = feed.get("content_kind") or "opportunity"
+    if sid in BUSINESS_NEWS_SOURCE_IDS or feed.get("crawler") == "business_news":
+        return (0, sid)
+    if kind == "news":
+        return (1, sid)
+    return (2, sid)
+
 PKT = ZoneInfo("Asia/Karachi")
-# DB purge for news rows (by scraped_at) — matches today+yesterday lookback
+# DB purge for news rows (by scraped_at) — matches news lookback window
 NEWS_RETENTION_DAYS = NEWS_LOOKBACK_DAYS
 
 _ingest_lock = asyncio.Lock()
@@ -85,6 +106,9 @@ def missed_todays_scheduled_run(now: Optional[datetime] = None) -> bool:
 
 async def _fetch_one_source(feed: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Fetch a single RSS or scrape source; raises on hard failure."""
+    # Example-code business crawlers (ProPakistani, Arab News, Khaleej) + Gemini
+    if is_business_news_source(feed):
+        return await fetch_business_news_source(feed)
     if feed.get("type") == "scrape":
         return await scrape_single_url(feed)
     return await fetch_single_feed(feed)
@@ -103,7 +127,7 @@ async def _process_one_feed(feed: Dict[str, Any]) -> Dict[str, Any]:
         raw_count = len(raw_items or [])
         kept = [i for i in (raw_items or []) if matches_target_geography(i)]
         if kind == "news":
-            # News: today + yesterday only (not grants/tenders)
+            # News: rolling lookback window (not grants/tenders)
             lookback = int(feed.get("max_age_days") or NEWS_LOOKBACK_DAYS)
             kept = [i for i in kept if not is_news_too_old(i, lookback_days=lookback)]
         else:
@@ -112,6 +136,9 @@ async def _process_one_feed(feed: Dict[str, Any]) -> Dict[str, Any]:
             kept = [i for i in kept if not is_stale_posted(i, max_age_days=max_age)]
         kept = stamp_content_kind(kept, [feed])
         kept = stamp_labels(kept)
+        # All news get Gemini summaries (priority sources already ran first)
+        if kind == "news" and kept:
+            kept = await attach_gemini_summaries_async(kept, name)
         record_source_ok(sid, len(kept), items_raw=raw_count)
         print(f"  ✓ {name}: {len(kept)} kept (raw {raw_count})")
         return {
@@ -210,9 +237,13 @@ async def run_full_ingest(trigger: str = "manual") -> Dict[str, Any]:
         print(f"\n⏱ Ingest started ({trigger}) at {started.isoformat()}")
 
         try:
-            enabled_feeds = get_enabled_feed_configs()
+            enabled_feeds = sorted(get_enabled_feed_configs(), key=_ingest_feed_sort_key)
             skipped = len(all_config["feeds"]) - len(enabled_feeds)
             print(f"  Enabled sources: {len(enabled_feeds)} (skipped {skipped} disabled)")
+            print(
+                "  Order: priority business news (3) → other news → opportunities "
+                "(Gemini follows this order)"
+            )
 
             if not enabled_feeds:
                 finished = datetime.now(PKT)
