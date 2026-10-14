@@ -4,7 +4,7 @@ Add your RSS feed URLs and scraping URLs here
 Set "type": "rss" for RSS feeds, "type": "scrape" for websites to scrape
 
 content_kind:
-  - "news"         → kept 3 days, then deleted by the daily job
+  - "news"         → kept 7 days, then deleted by the daily job
   - "opportunity"  → grants/tenders/procurement — kept (not auto-deleted)
 
 Geography: Pakistan + MENA only (not India, Türkiye, etc.).
@@ -163,9 +163,9 @@ config = {
             "type": "rss",
             "content_kind": "news",
             "url": "https://propakistani.pk/category/business/feed/",
-            "description": "ProPakistani business news via WordPress RSS (paginated). Business news is allowed; stored for 3 days.",
+            "description": "ProPakistani business news via WordPress RSS (paginated). Business news is allowed; stored for 7 days.",
             "keywords": [],
-            "max_age_days": 3,
+            "max_age_days": 7,
             "max_pages": 20,
             "skip_ai_filter": True,
             "skip_keyword_filter": True
@@ -207,7 +207,7 @@ config = {
 
 
 def news_source_ids() -> list:
-    """Source ids marked as news (3-day retention)."""
+    """Source ids marked as news (7-day retention)."""
     return [f["id"] for f in config["feeds"] if f.get("content_kind") == "news"]
 
 

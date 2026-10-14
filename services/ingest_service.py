@@ -4,7 +4,7 @@ Daily ingest + news retention + per-source health.
 - Runs once per day at 07:00 Asia/Karachi (Pakistan time)
 - On API startup: catch-up if today's 07:00 PKT run was missed
 - Manual re-run via POST /api/feeds/refresh
-- News older than NEWS_RETENTION_DAYS deleted; opportunities kept
+- News older than NEWS_RETENTION_DAYS (7) deleted; opportunities kept
 """
 import asyncio
 from datetime import datetime, timedelta, time
@@ -28,7 +28,7 @@ from services.source_health import record_source_error, record_source_ok
 from services.source_settings import get_enabled_feed_configs
 
 PKT = ZoneInfo("Asia/Karachi")
-NEWS_RETENTION_DAYS = 3
+NEWS_RETENTION_DAYS = 7
 
 _ingest_lock = asyncio.Lock()
 _last_run: Optional[Dict[str, Any]] = None

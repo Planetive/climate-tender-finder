@@ -382,21 +382,30 @@ function inferOpportunityType(item: BackendFeedItem): "Grant" | "RFP" | "Partner
 function inferRelevance(item: BackendFeedItem): "High" | "Medium" | "Low" {
   const text = `${item.title} ${item.description} ${item.content}`.toLowerCase();
   
-  // High: ESG advisory themes + industrial clients (oil/gas, chemicals, steel, …)
-  const highKeywords = [
-    'pakistan', 'mena', 'climate finance', 'climate risk', 'esg', 'carbon market',
-    'mrv', 'net zero', 'energy transition', 'oil', 'gas', 'petroleum', 'chemical',
-    'steel', 'cement', 'plastic', 'paper',
+  // Office / facilities buys are never High (photocopiers, elevators, …)
+  const noise = [
+    'photocopier', 'photocopy', 'copier', 'elevator', 'stationery', 'furniture',
+    'traditional craft', 'handicraft', 'toner', 'laptop',
   ];
-  if (highKeywords.some(keyword => text.includes(keyword))) {
+  if (noise.some((n) => text.includes(n))) {
+    return 'Low';
+  }
+
+  // High = real ESG / climate / industrial themes (geo alone is not enough)
+  const highKeywords = [
+    'climate finance', 'climate risk', 'esg', 'carbon market', 'mrv', 'net zero',
+    'energy transition', 'petroleum', 'oil and gas', 'chemical', 'steel', 'cement',
+    'plastic', 'decarbon', 'sustainable finance', 'green finance', 'renewable',
+  ];
+  if (highKeywords.some((keyword) => text.includes(keyword))) {
     return 'High';
   }
 
   const mediumKeywords = [
-    'sustainability', 'renewable', 'clean energy', 'climate', 'energy', 'carbon',
-    'adaptation', 'mitigation', 'emission',
+    'sustainability', 'clean energy', 'climate', 'energy', 'carbon',
+    'adaptation', 'mitigation', 'emission', 'solar', 'wind',
   ];
-  if (mediumKeywords.some(keyword => text.includes(keyword))) {
+  if (mediumKeywords.some((keyword) => text.includes(keyword))) {
     return 'Medium';
   }
 

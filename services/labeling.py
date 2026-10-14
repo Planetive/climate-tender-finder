@@ -1,15 +1,16 @@
 """
 Stamp user-facing labels on items: opportunity_type + relevance.
 
-Why: frontend was guessing "Grant" for almost everything.
 Relevance is for an ESG advisory (energy, climate finance/risk, industrials).
+Geography alone (Lebanon / Pakistan) is NOT enough for High — theme must match.
 """
 from typing import Any, Dict, List
 
 from services.content_filter import (
-    ESG_THEME_KEYWORDS,
     MENA_MARKERS,
     PAKISTAN_MARKERS,
+    is_noise_procurement,
+    matches_esg_theme,
     score_relevance,
 )
 
@@ -24,6 +25,14 @@ def _blob(item: Dict[str, Any]) -> str:
         " ".join(item.get("categories") or []),
     ]
     return " ".join(parts).lower()
+
+
+def _whole_word(term: str, text: str) -> bool:
+    import re
+
+    if " " in term or "-" in term:
+        return term in text
+    return re.search(rf"\b{re.escape(term)}\b", text) is not None
 
 
 def infer_opportunity_type(item: Dict[str, Any], content_kind: str) -> str:
@@ -59,7 +68,7 @@ def infer_opportunity_type(item: Dict[str, Any], content_kind: str) -> str:
     }
     if sid in tender_sources:
         text = _blob(item)
-        if "rfp" in text or "request for proposal" in text:
+        if "rfp" in text or "request for proposal" in text or "rfq" in text:
             return "RFP"
         return "Tender"
 
@@ -79,10 +88,14 @@ def infer_relevance(item: Dict[str, Any], content_kind: str) -> str:
     """
     High / Medium / Low for ESG-advisory usefulness.
 
-    High: Pakistan/MENA + strong ESG themes (climate finance/risk, energy, ESG, sector)
-    Medium: Pakistan/MENA with lighter theme hits, or strong theme without geo stamp
-    Low: weak theme match
+    High: PK/MENA + clear ESG/energy/climate/sector theme (not office supplies)
+    Medium: lighter theme match in focus geo
+    Low: noise procurement, or no real theme
     """
+    # Photocopiers, elevators, crafts, etc. are never High/Medium
+    if is_noise_procurement(item):
+        return "Low"
+
     text = _blob(item)
     country = (
         item.get("country")
@@ -95,6 +108,7 @@ def infer_relevance(item: Dict[str, Any], content_kind: str) -> str:
     mena = any(m in text or m in country for m in MENA_MARKERS)
     in_focus_geo = pk or mena
 
+    # Strong = phrases an ESG advisor actually cares about (whole words for short ones)
     high_terms = [
         "esg",
         "climate finance",
@@ -108,14 +122,18 @@ def infer_relevance(item: Dict[str, Any], content_kind: str) -> str:
         "green finance",
         "energy transition",
         "renewable",
-        "oil",
-        "gas",
         "petroleum",
+        "petrochemical",
+        "hydrocarbon",
+        "oil and gas",
+        "oil & gas",
         "chemical",
         "steel",
         "cement",
         "plastic",
-        "paper",
+        "greenhouse",
+        "tcfd",
+        "issb",
     ]
     medium_terms = [
         "climate",
@@ -127,22 +145,35 @@ def infer_relevance(item: Dict[str, Any], content_kind: str) -> str:
         "wind",
         "adaptation",
         "mitigation",
+        "renewable",
+        "environment",
     ]
 
-    strong = any(t in text for t in high_terms)
-    medium = any(t in text for t in medium_terms)
+    strong = any(_whole_word(t, text) if " " not in t and len(t) <= 8 else t in text for t in high_terms)
+    # oil / gas only as whole words (avoid random substring hits)
+    if _whole_word("oil", text) or _whole_word("gas", text):
+        strong = True
+
+    medium = any(
+        _whole_word(t, text) if len(t) <= 8 else t in text for t in medium_terms
+    )
+    theme_ok = matches_esg_theme(item)
     score = score_relevance(item)
+
+    # Must have a real ESG theme — geography alone is never High
+    if not theme_ok:
+        return "Low"
 
     if content_kind == "opportunity" and in_focus_geo and strong:
         return "High"
-    if in_focus_geo and (strong or score >= 3):
+    if in_focus_geo and strong:
         return "High" if content_kind == "opportunity" else "Medium"
-    if in_focus_geo and medium:
+    if in_focus_geo and medium and score >= 2:
+        return "High" if content_kind == "opportunity" else "Medium"
+    if in_focus_geo and (medium or score >= 1):
         return "Medium"
-    if strong or score >= 2:
+    if strong:
         return "Medium"
-    if medium or any(k in text for k in ESG_THEME_KEYWORDS[:20]):
-        return "Low"
     return "Low"
 
 

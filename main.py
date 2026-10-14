@@ -27,13 +27,18 @@ from services.opportunity_store import (
     count_by_source,
 )
 from services.adb_enrichment import is_stale_posted
-from services.content_filter import matches_esg_theme, matches_target_geography
+from services.content_filter import (
+    is_noise_procurement,
+    matches_esg_theme,
+    matches_target_geography,
+)
 from services.ingest_service import (
     daily_ingest_loop,
     run_full_ingest,
     get_last_ingest_info,
     seconds_until_next_7am_pkt,
 )
+from services.labeling import stamp_labels
 from services.source_settings import (
     load_settings,
     set_source_enabled,
@@ -69,7 +74,7 @@ def _filter_target_geo(items: list) -> list:
 def _filter_esg_theme(items: list) -> list:
     """
     Opportunities must match ESG-advisory themes (energy, climate finance/risk, industrials).
-    News from allowlisted PK sources can pass without theme (business news retention).
+    Drop noise buys (photocopiers, elevators, …). News sources can pass without theme.
     """
     news_ids = _news_source_ids()
     kept = []
@@ -80,9 +85,19 @@ def _filter_esg_theme(items: list) -> list:
         if kind == "news" or sid in news_ids:
             kept.append(item)
             continue
+        if is_noise_procurement(item):
+            continue
         if matches_esg_theme(item):
             kept.append(item)
     return kept
+
+
+def _prepare_feed_items(items: list) -> list:
+    """Geo + ESG theme + stale ADB filter, then refresh High/Medium/Low labels."""
+    filtered = _filter_target_geo(items) if items else []
+    filtered = _filter_esg_theme(filtered)
+    filtered = _filter_stale_adb(filtered)
+    return stamp_labels(filtered)
 
 
 def _filter_stale_adb(items: list) -> list:
@@ -169,9 +184,7 @@ async def get_feeds(
 
         fetch_limit = min(max(limit + offset, limit), 2000)
         db_items, db_total = await list_opportunities(limit=fetch_limit, offset=0)
-        filtered = _filter_target_geo(db_items) if db_items else []
-        filtered = _filter_esg_theme(filtered)
-        filtered = _filter_stale_adb(filtered)
+        filtered = _prepare_feed_items(db_items)
         page = filtered[offset:offset + limit]
         return {
             "success": True,
@@ -197,7 +210,7 @@ async def get_feeds(
 
 @app.post("/api/feeds/refresh")
 async def refresh_feeds():
-    """Manual re-run: scrape all sources, upsert, purge news older than 3 days."""
+    """Manual re-run: scrape all sources, upsert, purge news older than 7 days."""
     result = await run_full_ingest(trigger="manual")
     if result.get("running"):
         raise HTTPException(status_code=409, detail=result)

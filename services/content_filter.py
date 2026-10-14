@@ -6,6 +6,7 @@ Theme: energy / ESG / climate finance & risk / industrials (oil & gas, chemicals
 paper, plastics, steel, etc.) — what an ESG advisory needs for clients like
 Mari, OGDCL, and manufacturing companies.
 """
+import re
 from typing import Any, Dict, List, Optional
 
 # --- Geography: Pakistan + MENA only -----------------------------------------
@@ -82,6 +83,34 @@ ESG_THEME_KEYWORDS = [
 
 # Kept for backward-compatible imports / scoring helpers
 DEFAULT_KEYWORDS = list(ESG_THEME_KEYWORDS)
+
+# Short tokens must match as whole words ("gas" must not hit random text)
+_WORD_BOUNDARY_KEYWORDS = {
+    "esg", "mrv", "ghg", "gri", "tcfd", "issb", "csrd", "sasb", "lng",
+    "oil", "gas", "grid", "fuel", "power", "iron", "metal", "paper", "pulp",
+    "steel", "cement", "waste", "solar", "wind", "hydro", "green", "carbon",
+}
+
+# Office / facilities / generic procurement — NOT ESG advisory work
+# (e.g. photocopiers, elevators, crafts) unless a real ESG theme also appears
+NOISE_KEYWORDS = [
+    "photocopier", "photocopy", "copier", "printer", "toner", "stationery",
+    "elevator", "lift installation", "furniture", "office supply", "office supplies",
+    "vehicle purchase", "vehicle rental", "car rental", "taxi",
+    "catering", "cleaning service", "security guard", "guard services",
+    "traditional craft", "handicraft", "crafts and market",
+    "digitization platform", "scanner", "laptop", "desktop computer",
+]
+
+
+def _keyword_in_text(keyword: str, text: str) -> bool:
+    """Substring match for phrases; whole-word match for short tokens."""
+    kw = keyword.lower().strip()
+    if not kw or not text:
+        return False
+    if kw in _WORD_BOUNDARY_KEYWORDS or len(kw) <= 4:
+        return re.search(rf"\b{re.escape(kw)}\b", text) is not None
+    return kw in text
 
 
 def _search_blob(item: Dict[str, Any]) -> str:
@@ -165,17 +194,29 @@ def matches_target_geography(item: Dict[str, Any]) -> bool:
     return False
 
 
+def is_noise_procurement(item: Dict[str, Any]) -> bool:
+    """
+    True for office/facilities buys that are not ESG advisory work.
+    Example: photocopiers, elevators, stationery.
+    """
+    text = _search_blob(item)
+    return any(n in text for n in NOISE_KEYWORDS)
+
+
 def matches_esg_theme(
     item: Dict[str, Any],
     additional_keywords: Optional[List[str]] = None,
 ) -> bool:
     """
     True when text matches ESG-advisory themes / industrial client sectors.
+    Noise procurements (photocopiers, elevators, …) are never a theme match.
     """
+    if is_noise_procurement(item):
+        return False
     extra = [k.lower() for k in (additional_keywords or []) if k]
     keywords = ESG_THEME_KEYWORDS + extra
     search_text = _search_blob(item)
-    return any(keyword.lower() in search_text for keyword in keywords)
+    return any(_keyword_in_text(keyword, search_text) for keyword in keywords)
 
 
 def filter_relevant_content(
@@ -203,7 +244,9 @@ def passes_content_filters(
 
 def score_relevance(item: Dict[str, Any], additional_keywords: List[str] = None) -> int:
     """Higher = more ESG-theme keyword hits (simple ranking helper)."""
+    if is_noise_procurement(item):
+        return 0
     extra = [k.lower() for k in (additional_keywords or []) if k]
     keywords = ESG_THEME_KEYWORDS + extra
     search_text = _search_blob(item)
-    return sum(search_text.count(keyword.lower()) for keyword in keywords)
+    return sum(1 for keyword in keywords if _keyword_in_text(keyword, search_text))
