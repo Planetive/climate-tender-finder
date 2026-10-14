@@ -222,7 +222,9 @@ def parse_feed_item(item: feedparser.FeedParserDict, feed_config: Dict[str, Any]
     if adb_meta.get("project_number"):
         result["reference_number"] = adb_meta["project_number"]
     if adb_meta.get("date"):
+        # ADB category "Date:" is the invitation/posted date — NOT the bid deadline
         result["posted"] = adb_meta["date"]
+        # Do not set deadline from this field (deadline comes from IFB PDF enrichment)
 
     return result
 
@@ -438,6 +440,21 @@ async def fetch_single_feed(feed_config: Dict[str, Any]) -> List[Dict[str, Any]]
             for item in processed_items
             if passes_content_filters(item, keywords, skip_keyword_filter=skip_kw)
         ]
+
+        # ADB tender feeds: pull real bid deadline from IFB PDF/HTML, drop expired
+        source_id = (feed_config.get("id") or "").lower()
+        if source_id.startswith("adb-") and feed_config.get("content_kind") == "opportunity":
+            from services.adb_enrichment import enrich_adb_items, is_deadline_past
+
+            print(f"  Enriching ADB deadlines from linked IFB documents ({len(relevant_items)} items)...")
+            relevant_items = await enrich_adb_items(relevant_items)
+            before = len(relevant_items)
+            relevant_items = [i for i in relevant_items if not is_deadline_past(i)]
+            dropped = before - len(relevant_items)
+            if dropped:
+                print(f"  Dropped {dropped} ADB items with past bid deadlines")
+            with_deadline = sum(1 for i in relevant_items if i.get("deadline"))
+            print(f"  ADB deadlines found: {with_deadline}/{len(relevant_items)}")
 
         print(f"✓ {feed_config['name']}: Found {len(relevant_items)} relevant items out of {len(processed_items)}")
 

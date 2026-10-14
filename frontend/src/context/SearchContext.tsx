@@ -7,6 +7,8 @@ interface SearchFilters {
   country: string;
   region: string;
   source: string;
+  /** all | Deadline | Published | Posted */
+  dateKind: string;
 }
 
 interface SearchContextType {
@@ -26,6 +28,7 @@ const defaultFilters: SearchFilters = {
   country: "all",
   region: "all",
   source: "all",
+  dateKind: "all",
 };
 
 const SearchContext = createContext<SearchContextType | undefined>(undefined);
@@ -50,7 +53,8 @@ export function SearchProvider({ children }: { children: ReactNode }) {
     filters.relevance !== "all" ||
     filters.country !== "all" ||
     filters.region !== "all" ||
-    filters.source !== "all";
+    filters.source !== "all" ||
+    filters.dateKind !== "all";
 
   return (
     <SearchContext.Provider
