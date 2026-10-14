@@ -7,7 +7,13 @@ import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
-import { fetchSources, toggleSourceEnabled, fetchIngestStatus, type IngestStatusResponse } from "@/services/api";
+import {
+  fetchSources,
+  toggleSourceEnabled,
+  fetchIngestStatus,
+  triggerFeedRefresh,
+  type IngestStatusResponse,
+} from "@/services/api";
 
 interface Source {
   id: string;
@@ -46,6 +52,47 @@ export default function Sources() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [togglingId, setTogglingId] = useState<string | null>(null);
+  const [scraping, setScraping] = useState(false);
+
+  async function handleRunScrape() {
+    if (scraping) return;
+    setScraping(true);
+    toast({
+      title: "Scrape started",
+      description: "Running enabled sources — this can take a few minutes.",
+    });
+    try {
+      const result = await triggerFeedRefresh();
+      if (result.running) {
+        toast({
+          title: "Already running",
+          description: "A scrape is already in progress. Wait for it to finish.",
+        });
+        return;
+      }
+      if (!result.success) {
+        toast({
+          title: "Scrape finished with errors",
+          description: result.error || `${result.sources_error ?? 0} sources failed`,
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Scrape complete",
+          description: `Saved ${result.upserted ?? result.items ?? 0} items · ${result.sources_ok ?? "?"} ok / ${result.sources_error ?? 0} errors.`,
+        });
+      }
+      await loadSources();
+    } catch (err) {
+      toast({
+        title: "Scrape failed",
+        description: err instanceof Error ? err.message : "Could not start scrape",
+        variant: "destructive",
+      });
+    } finally {
+      setScraping(false);
+    }
+  }
 
   async function loadSources() {
     try {
@@ -133,14 +180,25 @@ export default function Sources() {
               Turn sources on/off. Disabled sources are skipped at 7:00 AM PKT and when you Re-run feeds.
             </p>
           </div>
-          <Button
-            className="bg-primary text-primary-foreground hover:bg-primary/90"
-            onClick={loadSources}
-            disabled={loading}
-          >
-            <RefreshCw className={`w-4 h-4 mr-2 ${loading ? "animate-spin" : ""}`} />
-            {loading ? "Loading…" : "Refresh list"}
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="outline"
+              onClick={loadSources}
+              disabled={loading || scraping}
+            >
+              <RefreshCw className={`w-4 h-4 mr-2 ${loading ? "animate-spin" : ""}`} />
+              {loading ? "Loading…" : "Refresh list"}
+            </Button>
+            <Button
+              className="bg-primary text-primary-foreground hover:bg-primary/90"
+              onClick={handleRunScrape}
+              disabled={scraping || loading}
+              title="Manually run scrape (same job as 7:00 AM PKT)"
+            >
+              <RefreshCw className={`w-4 h-4 mr-2 ${scraping ? "animate-spin" : ""}`} />
+              {scraping ? "Scraping…" : "Run scrape now"}
+            </Button>
+          </div>
         </div>
 
         {/* Ingest health banner */}

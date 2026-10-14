@@ -106,7 +106,7 @@ export function AppSidebar() {
   }
 
   return (
-    <Sidebar collapsible="icon" className="border-r border-border bg-card">
+    <Sidebar collapsible="icon" className="border-r border-border bg-card flex flex-col h-svh">
       <SidebarHeader className="p-4 border-b border-border">
         <div className="flex items-center gap-3">
           <img 
@@ -121,7 +121,7 @@ export function AppSidebar() {
           )}
         </div>
       </SidebarHeader>
-      <SidebarContent className="p-2">
+      <SidebarContent className="p-2 flex-1">
         <SidebarGroup>
           <SidebarGroupContent>
             <SidebarMenu>
@@ -150,21 +150,21 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>
-      <SidebarFooter className="p-2 border-t border-border">
+      <SidebarFooter className="p-2 border-t border-border mt-auto shrink-0">
         <Button
-          variant="outline"
+          variant="default"
           size={collapsed ? "icon" : "sm"}
-          className="w-full"
+          className="w-full bg-primary text-primary-foreground"
           onClick={handleRerun}
           disabled={refreshing}
-          title="Re-run scrape now (also runs daily at 7:00 AM Pakistan time)"
+          title="Run scrape now (also runs daily at 7:00 AM Pakistan time)"
         >
           <RefreshCw className={cn("w-4 h-4", refreshing && "animate-spin", !collapsed && "mr-2")} />
-          {!collapsed && (refreshing ? "Refreshing…" : "Re-run feeds")}
+          {!collapsed && (refreshing ? "Scraping…" : "Run scrape now")}
         </Button>
         {!collapsed && (
           <p className="text-[10px] text-muted-foreground px-1 pt-1 leading-snug">
-            Auto 7:00 AM PKT (+ catch-up on restart). News 3 days; grants stay.
+            Auto 7:00 AM PKT. Use this anytime after that.
             {ingestHint ? ` ${ingestHint}.` : ""}
           </p>
         )}
