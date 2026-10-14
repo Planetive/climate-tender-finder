@@ -23,7 +23,7 @@ import { OpportunityCard } from "@/components/dashboard/OpportunityCard";
 import { useNavigate } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { useSearch } from "@/context/SearchContext";
-import { fetchOpportunities, fetchSources, type Opportunity } from "@/services/api";
+import { cacheOpportunitiesById, fetchOpportunities, fetchSources, type Opportunity } from "@/services/api";
 
 const relevanceStyles = {
   High: "bg-primary/10 text-primary border-primary/20",
@@ -36,6 +36,7 @@ const typeStyles = {
   RFP: "bg-secondary text-secondary-foreground",
   Partnership: "bg-primary/80 text-primary-foreground",
   Tender: "bg-secondary/80 text-secondary-foreground",
+  News: "bg-muted text-muted-foreground",
 };
 
 export default function Opportunities() {
@@ -58,6 +59,7 @@ export default function Opportunities() {
           fetchSources(),
         ]);
         setOpportunities(data);
+        cacheOpportunitiesById(data);
         setConfiguredSourceNames(sources.map((s) => s.name).sort());
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load opportunities');
@@ -90,11 +92,15 @@ export default function Opportunities() {
       opp.fundingAgency.toLowerCase().includes(searchQuery.toLowerCase()) ||
       opp.tags.some((tag) => tag.toLowerCase().includes(searchQuery.toLowerCase()));
     const matchesType = filters.type === "all" || opp.type === filters.type;
+    const matchesKind =
+      filters.kind === "all" ||
+      opp.contentKind === filters.kind ||
+      (filters.kind === "opportunity" && !opp.contentKind);
     const matchesRelevance = filters.relevance === "all" || opp.relevance === filters.relevance;
     const matchesCountry = filters.country === "all" || opp.country === filters.country;
     const matchesRegion = filters.region === "all" || opp.region === filters.region;
     const matchesSource = filters.source === "all" || opp.source === filters.source;
-    return matchesSearch && matchesType && matchesRelevance && matchesCountry && matchesRegion && matchesSource;
+    return matchesSearch && matchesType && matchesKind && matchesRelevance && matchesCountry && matchesRegion && matchesSource;
   });
 
   return (
@@ -120,6 +126,16 @@ export default function Opportunities() {
                 className="pl-10 bg-card border-border"
               />
             </div>
+            <Select value={filters.kind} onValueChange={(value) => updateFilter("kind", value)}>
+              <SelectTrigger className="w-44 bg-card border-border">
+                <SelectValue placeholder="Category" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All categories</SelectItem>
+                <SelectItem value="opportunity">Grants &amp; tenders</SelectItem>
+                <SelectItem value="news">News &amp; updates</SelectItem>
+              </SelectContent>
+            </Select>
             <Select value={filters.type} onValueChange={(value) => updateFilter("type", value)}>
               <SelectTrigger className="w-40 bg-card border-border">
                 <SelectValue placeholder="Type" />
@@ -130,6 +146,7 @@ export default function Opportunities() {
                 <SelectItem value="RFP">RFP</SelectItem>
                 <SelectItem value="Partnership">Partnership</SelectItem>
                 <SelectItem value="Tender">Tender</SelectItem>
+                <SelectItem value="News">News</SelectItem>
               </SelectContent>
             </Select>
             <Select value={filters.relevance} onValueChange={(value) => updateFilter("relevance", value)}>
@@ -215,7 +232,7 @@ export default function Opportunities() {
                   <TableHead className="font-semibold text-foreground">Country</TableHead>
                   <TableHead className="font-semibold text-foreground">Type</TableHead>
                   <TableHead className="font-semibold text-foreground">Relevance</TableHead>
-                  <TableHead className="font-semibold text-foreground">Deadline</TableHead>
+                  <TableHead className="font-semibold text-foreground">Date</TableHead>
                   <TableHead className="font-semibold text-foreground">Link</TableHead>
                 </TableRow>
               </TableHeader>
@@ -227,7 +244,9 @@ export default function Opportunities() {
                       "cursor-pointer hover:bg-accent/50",
                       opp.relevance === "High" && "border-l-4 border-l-primary"
                     )}
-                    onClick={() => navigate(`/opportunities/${opp.id}`)}
+                    onClick={() =>
+                      navigate(`/opportunities/${opp.id}`, { state: { opportunity: opp } })
+                    }
                   >
                     <TableCell className="font-medium text-foreground max-w-xs truncate">
                       {opp.title}
@@ -235,14 +254,29 @@ export default function Opportunities() {
                     <TableCell className="text-muted-foreground">{opp.source}</TableCell>
                     <TableCell className="text-muted-foreground">{opp.country}</TableCell>
                     <TableCell>
-                      <Badge className={typeStyles[opp.type]}>{opp.type}</Badge>
+                      <div className="flex flex-wrap gap-1">
+                        {opp.contentKind === "news" ? (
+                          <Badge variant="secondary">News</Badge>
+                        ) : (
+                          <Badge className={typeStyles[opp.type]}>{opp.type}</Badge>
+                        )}
+                      </div>
                     </TableCell>
                     <TableCell>
                       <Badge variant="outline" className={relevanceStyles[opp.relevance]}>
                         {opp.relevance}
                       </Badge>
                     </TableCell>
-                    <TableCell className="text-muted-foreground">{opp.deadline}</TableCell>
+                    <TableCell className="text-muted-foreground">
+                      <div className="leading-tight">
+                        <span>{opp.dateDisplay || opp.deadline}</span>
+                        {opp.dateLabel && opp.dateDisplay && opp.dateDisplay !== "Not specified" && (
+                          <span className="block text-[10px] text-muted-foreground/80">
+                            {opp.dateLabel}
+                          </span>
+                        )}
+                      </div>
+                    </TableCell>
                     <TableCell>
                       {opp.link ? (
                         <Button
@@ -277,10 +311,14 @@ export default function Opportunities() {
                 source={opp.source}
                 country={opp.country}
                 type={opp.type}
+                contentKind={opp.contentKind}
                 relevance={opp.relevance}
-                deadline={opp.deadline}
+                deadline={opp.dateDisplay || opp.deadline}
+                dateLabel={opp.dateLabel}
                 link={opp.link}
-                onClick={() => navigate(`/opportunities/${opp.id}`)}
+                onClick={() =>
+                  navigate(`/opportunities/${opp.id}`, { state: { opportunity: opp } })
+                }
               />
             ))}
           </div>

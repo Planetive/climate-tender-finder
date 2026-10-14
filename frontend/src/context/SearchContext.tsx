@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, ReactNode } from "react";
 
 interface SearchFilters {
   type: string;
+  kind: string;
   relevance: string;
   country: string;
   region: string;
@@ -20,6 +21,7 @@ interface SearchContextType {
 
 const defaultFilters: SearchFilters = {
   type: "all",
+  kind: "all",
   relevance: "all",
   country: "all",
   region: "all",
@@ -44,6 +46,7 @@ export function SearchProvider({ children }: { children: ReactNode }) {
   const hasActiveFilters =
     searchQuery !== "" ||
     filters.type !== "all" ||
+    filters.kind !== "all" ||
     filters.relevance !== "all" ||
     filters.country !== "all" ||
     filters.region !== "all" ||

@@ -1,4 +1,4 @@
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { useState, useEffect } from "react";
 import { ArrowLeft, Download, Calendar, MapPin, Building2, FileText, Sparkles, Heart, UserPlus, Check, ExternalLink } from "lucide-react";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
@@ -19,7 +19,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/context/AuthContext";
 import { useAlerts } from "@/context/AlertsContext";
 import { cn } from "@/lib/utils";
-import { fetchOpportunities, type Opportunity } from "@/services/api";
+import { cacheOpportunitiesById, fetchOpportunityById, getCachedOpportunity, type Opportunity } from "@/services/api";
 
 const relevanceStyles = {
   High: "bg-primary/10 text-primary border-primary/20",
@@ -32,11 +32,22 @@ const typeStyles = {
   RFP: "bg-secondary text-secondary-foreground",
   Partnership: "bg-primary/80 text-primary-foreground",
   Tender: "bg-secondary/80 text-secondary-foreground",
+  News: "bg-muted text-muted-foreground",
 };
+
+function applyAssignment(found: Opportunity, setAssignedOwner: (v: string | undefined) => void) {
+  const assignmentsKey = "funding_tracker_assignments";
+  const assignments = JSON.parse(localStorage.getItem(assignmentsKey) || "{}");
+  const assignment = assignments[found.id];
+  if (assignment) {
+    setAssignedOwner(assignment.assignedTo);
+  }
+}
 
 export default function OpportunityDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const { toast } = useToast();
   const { user } = useAuth();
   const alertsContext = useAlerts();
@@ -44,14 +55,18 @@ export default function OpportunityDetail() {
   const [isInterested, setIsInterested] = useState(false);
   const [assignedOwner, setAssignedOwner] = useState<string | undefined>(undefined);
   const [isAssignDialogOpen, setIsAssignDialogOpen] = useState(false);
-  const [opportunity, setOpportunity] = useState<Opportunity | null>(null);
-  const [loading, setLoading] = useState(true);
+  // Prefer router state from the list click (instant — no loading spinner)
+  const stateOpp = (location.state as { opportunity?: Opportunity } | null)?.opportunity;
+  const [opportunity, setOpportunity] = useState<Opportunity | null>(
+    stateOpp && stateOpp.id === id ? stateOpp : null
+  );
+  const [loading, setLoading] = useState(!(stateOpp && stateOpp.id === id));
   const [error, setError] = useState<string | null>(null);
   
   // Get team members - defined early so it's always available
   const teamMembers = getTeamMembersForExport();
 
-  // Fetch opportunity from API
+  // Use list/cache first; only hit API if we opened a direct URL with no cache
   useEffect(() => {
     async function loadOpportunity() {
       if (!id) {
@@ -60,34 +75,48 @@ export default function OpportunityDetail() {
         return;
       }
 
+      // 1) Router state from Opportunities list click
+      const fromNav = (location.state as { opportunity?: Opportunity } | null)?.opportunity;
+      if (fromNav && fromNav.id === id) {
+        setOpportunity(fromNav);
+        cacheOpportunitiesById([fromNav]);
+        applyAssignment(fromNav, setAssignedOwner);
+        setLoading(false);
+        setError(null);
+        return;
+      }
+
+      // 2) Session/memory cache from the list we already loaded
+      const fromCache = getCachedOpportunity(id);
+      if (fromCache) {
+        setOpportunity(fromCache);
+        applyAssignment(fromCache, setAssignedOwner);
+        setLoading(false);
+        setError(null);
+        return;
+      }
+
+      // 3) Last resort: single-item DB lookup (still no full scrape)
       try {
         setLoading(true);
         setError(null);
-        const opportunities = await fetchOpportunities(200);
-        const found = opportunities.find((o) => o.id === id);
-        
+        const found = await fetchOpportunityById(id);
+
         if (found) {
           setOpportunity(found);
-          
-          // Load saved assignment
-          const assignmentsKey = "funding_tracker_assignments";
-          const assignments = JSON.parse(localStorage.getItem(assignmentsKey) || "{}");
-          const assignment = assignments[found.id];
-          if (assignment) {
-            setAssignedOwner(assignment.assignedTo);
-          }
+          applyAssignment(found, setAssignedOwner);
         } else {
           setError("Opportunity not found");
         }
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load opportunity');
-        console.error('Error loading opportunity:', err);
+        setError(err instanceof Error ? err.message : "Failed to load opportunity");
+        console.error("Error loading opportunity:", err);
       } finally {
         setLoading(false);
       }
     }
     loadOpportunity();
-  }, [id]);
+  }, [id, location.state]);
 
   const handleMarkInterested = () => {
     setIsInterested(!isInterested);
@@ -169,7 +198,7 @@ export default function OpportunityDetail() {
         <div className="flex flex-col items-center justify-center h-[60vh] gap-4">
           <p className="text-muted-foreground">{error || "Opportunity not found"}</p>
           <p className="text-sm text-muted-foreground">
-            Make sure the backend server is running on http://localhost:3001
+            This item may not be stored yet. Go back to Opportunities and refresh the list, then try again.
           </p>
           <Button onClick={() => navigate("/opportunities")}>
             Back to Opportunities
@@ -276,8 +305,19 @@ export default function OpportunityDetail() {
                   <Calendar className="w-5 h-5 text-primary" />
                 </div>
                 <div>
-                  <p className="text-xs text-muted-foreground">Deadline</p>
-                  <p className="text-sm font-medium text-foreground">{opportunity.deadline}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {opportunity.dateLabel || "Date"}
+                  </p>
+                  <p className="text-sm font-medium text-foreground">
+                    {opportunity.dateDisplay || opportunity.deadline}
+                  </p>
+                  {opportunity.dateLabel === "Deadline" &&
+                    opportunity.published &&
+                    opportunity.published !== "Not specified" && (
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        Published: {opportunity.published}
+                      </p>
+                    )}
                 </div>
               </div>
               <div className="flex items-center gap-3">

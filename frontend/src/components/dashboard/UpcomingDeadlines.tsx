@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { useNavigate } from "react-router-dom";
 import { differenceInDays, format, isAfter } from "date-fns";
-import { fetchOpportunities, type Opportunity } from "@/services/api";
+import { cacheOpportunitiesById, fetchOpportunities, type Opportunity } from "@/services/api";
 
 export function UpcomingDeadlines() {
   const navigate = useNavigate();
@@ -19,6 +19,7 @@ export function UpcomingDeadlines() {
       try {
         const data = await fetchOpportunities(50);
         setOpportunities(data);
+        cacheOpportunitiesById(data);
       } catch (error) {
         console.error('Error loading opportunities for deadlines:', error);
       } finally {
@@ -28,10 +29,17 @@ export function UpcomingDeadlines() {
     loadOpportunities();
   }, []);
 
-  // Filter opportunities with future deadlines and calculate days left
+  // Only real deadlines (not published-date fallbacks / far-future placeholders)
   const upcomingDeadlines = opportunities
-    .filter((opp) => isAfter(opp.deadlineDate, today))
+    .filter(
+      (opp) =>
+        opp.dateLabel === "Deadline" &&
+        opp.deadline !== "Not specified" &&
+        isAfter(opp.deadlineDate, today) &&
+        opp.deadlineDate.getFullYear() < 2090
+    )
     .map((opp) => ({
+      opp,
       id: opp.id,
       title: opp.title,
       date: format(opp.deadlineDate, "MMM d, yyyy"),
@@ -58,7 +66,11 @@ export function UpcomingDeadlines() {
         {upcomingDeadlines.map((deadline) => (
           <div
             key={deadline.id}
-            onClick={() => navigate(`/opportunities/${deadline.id}`)}
+            onClick={() =>
+              navigate(`/opportunities/${deadline.id}`, {
+                state: { opportunity: deadline.opp },
+              })
+            }
             className="flex items-center justify-between p-3 rounded-lg hover:bg-accent transition-colors cursor-pointer"
           >
             <div className="flex-1 min-w-0">

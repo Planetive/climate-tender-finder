@@ -6,7 +6,7 @@ import ssl
 import warnings
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
-from services.content_filter import filter_relevant_content
+from services.content_filter import passes_content_filters
 
 # Suppress SSL warnings when verify=False
 warnings.filterwarnings('ignore', message='Unverified HTTPS request')
@@ -430,22 +430,22 @@ async def fetch_single_feed(feed_config: Dict[str, Any]) -> List[Dict[str, Any]]
             for item in feed.entries
         ]
 
-        # skip_ai_filter / skip_keyword_filter = keep all (e.g. ProPakistani business news)
-        if feed_config.get("skip_keyword_filter") or feed_config.get("skip_ai_filter"):
-            relevant_items = processed_items
-        else:
-            keywords = feed_config.get('keywords', [])
-            relevant_items = [
-                item for item in processed_items
-                if filter_relevant_content(item, keywords)
-            ]
+        # skip_keyword_filter = skip climate keywords only; geography (PK/MENA/Global) always applies
+        keywords = feed_config.get("keywords", [])
+        skip_kw = bool(feed_config.get("skip_keyword_filter"))
+        relevant_items = [
+            item
+            for item in processed_items
+            if passes_content_filters(item, keywords, skip_keyword_filter=skip_kw)
+        ]
 
         print(f"✓ {feed_config['name']}: Found {len(relevant_items)} relevant items out of {len(processed_items)}")
 
         return relevant_items
     except Exception as error:
+        # Re-raise so ingest can mark this source as error (not silent empty)
         print(f"✗ Error fetching {feed_config['name']}: {str(error)}")
-        return []  # Return empty list on error
+        raise
 
 
 async def fetch_and_filter_feeds(feed_configs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -458,19 +458,20 @@ async def fetch_and_filter_feeds(feed_configs: List[Dict[str, Any]]) -> List[Dic
     Returns:
         List of parsed and filtered feed items, sorted by date (newest first)
     """
-    # Fetch all feeds concurrently
+    # Fetch all feeds concurrently; isolate failures per feed
     tasks = [fetch_single_feed(feed_config) for feed_config in feed_configs]
-    results = await asyncio.gather(*tasks)
-    
-    # Flatten all items into a single list
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
     all_items = []
-    for items in results:
-        all_items.extend(items)
-    
-    # Sort by publication date (newest first)
+    for feed_config, result in zip(feed_configs, results):
+        if isinstance(result, Exception):
+            print(f"✗ Skipping failed feed {feed_config.get('name')}: {result}")
+            continue
+        all_items.extend(result)
+
     all_items.sort(
         key=lambda x: x.get('pubDate', ''),
         reverse=True
     )
-    
+
     return all_items

@@ -41,6 +41,8 @@ interface BackendFeedItem {
   deadline_display?: string;
   attachments?: { name: string; url: string }[];
   opportunity_type?: string;
+  content_kind?: string;
+  relevance?: string;
 }
 
 interface BackendSource {
@@ -49,6 +51,20 @@ interface BackendSource {
   type: string;
   url: string;
   description: string;
+  content_kind?: string;
+  category?: string;
+  enabled?: boolean;
+  status?: string;
+  opportunities_found?: number;
+  last_sync?: string | null;
+  health?: {
+    status?: string | null;
+    items_kept?: number | null;
+    items_raw?: number | null;
+    last_error?: string | null;
+    message?: string | null;
+    last_success_at?: string | null;
+  };
 }
 
 interface BackendFeedsResponse {
@@ -75,10 +91,18 @@ export interface Opportunity {
   source: string;
   country: string;
   region: string;
-  type: "Grant" | "RFP" | "Partnership" | "Tender";
+  type: "Grant" | "RFP" | "Partnership" | "Tender" | "News";
+  /** news = articles/updates; opportunity = grants/tenders/procurement */
+  contentKind: "news" | "opportunity";
   relevance: "High" | "Medium" | "Low";
   deadline: string;
   deadlineDate: Date;
+  /** ISO or display-friendly published/posted date when we have one */
+  published: string;
+  /** What the list/detail date field means */
+  dateLabel: "Deadline" | "Published" | "Posted";
+  /** Best date to show the user (deadline if present, else published) */
+  dateDisplay: string;
   fundingAgency: string;
   tags: string[];
   summary: string;
@@ -100,26 +124,47 @@ function transformFeedToOpportunity(item: BackendFeedItem): Opportunity {
   const country = extractCountry(item);
   const region = extractRegion(item, country);
   
-  // Infer opportunity type from title/categories
+  // Prefer backend labels (set during ingest); fall back to local heuristics
   const type = inferOpportunityType(item);
+  const relevance =
+    item.relevance === "High" || item.relevance === "Medium" || item.relevance === "Low"
+      ? item.relevance
+      : inferRelevance(item);
   
-  // Infer relevance from keywords and content
-  const relevance = inferRelevance(item);
-  
-  // Try to get deadline from backend field first (for paktender), otherwise extract from content
+  // Deadline (tenders/grants) and/or published date (news, many grants)
   let deadline: string;
   let deadlineDate: Date;
-  
+
   if (item.deadline) {
-    // Backend already provided deadline (e.g., from paktender)
     deadline = formatDeadlineForDisplay(item.deadline);
     deadlineDate = parseDeadlineDate(item.deadline);
   } else {
-    // Try to extract deadline from content
     deadline = extractDeadline(item);
     deadlineDate = parseDeadlineDate(deadline);
   }
-  
+
+  const publishedRaw = item.posted || item.pubDate || "";
+  const published = publishedRaw ? formatPubDateForDisplay(publishedRaw) : "";
+
+  const hasRealDeadline =
+    Boolean(item.deadline) ||
+    (deadline && deadline !== "Not specified" && !/^not specified$/i.test(deadline));
+
+  let dateLabel: "Deadline" | "Published" | "Posted" = "Deadline";
+  let dateDisplay = deadline;
+  if (hasRealDeadline) {
+    dateLabel = "Deadline";
+    dateDisplay = deadline;
+  } else if (published) {
+    dateLabel = item.posted ? "Posted" : "Published";
+    dateDisplay = published;
+    // Keep deadlineDate aligned to published for sorting when no deadline
+    deadlineDate = parseDeadlineDate(publishedRaw.slice(0, 10) || published);
+  } else {
+    dateLabel = "Published";
+    dateDisplay = "Not specified";
+  }
+
   // Use source name as funding agency
   const fundingAgency = item.source.name;
   
@@ -153,6 +198,9 @@ function transformFeedToOpportunity(item: BackendFeedItem): Opportunity {
     documents.push({ name: item.reference_number ? 'View' : 'View Details', url: item.link });
   }
   
+  const contentKind: "news" | "opportunity" =
+    item.content_kind === "news" ? "news" : "opportunity";
+
   return {
     id: item.id,
     title: item.title,
@@ -160,9 +208,13 @@ function transformFeedToOpportunity(item: BackendFeedItem): Opportunity {
     country,
     region,
     type,
+    contentKind,
     relevance,
-    deadline,
+    deadline: hasRealDeadline ? deadline : "Not specified",
     deadlineDate,
+    published: published || "Not specified",
+    dateLabel,
+    dateDisplay,
     fundingAgency,
     tags,
     summary,
@@ -259,26 +311,61 @@ function extractRegion(item: BackendFeedItem, country: string): string {
 }
 
 /**
- * Infer opportunity type from feed item
+ * Infer opportunity type from feed item.
+ * Prefer backend opportunity_type / source, so tenders are not mislabeled as Grant.
  */
-function inferOpportunityType(item: BackendFeedItem): "Grant" | "RFP" | "Partnership" | "Tender" {
-  const text = `${item.title} ${item.description}`.toLowerCase();
-  const categories = item.categories.map(c => c.toLowerCase()).join(' ');
-  
-  if (text.includes('rfp') || text.includes('request for proposal') || text.includes('request for proposals')) {
-    return 'RFP';
+function inferOpportunityType(item: BackendFeedItem): "Grant" | "RFP" | "Partnership" | "Tender" | "News" {
+  const mapType = (raw: string): "Grant" | "RFP" | "Partnership" | "Tender" | "News" | null => {
+    const t = raw.toLowerCase();
+    if (t === "news" || t.includes("news")) {
+      return "News";
+    }
+    if (t.includes('rfp') || t.includes('request for proposal') || t.includes('rfq') || t.includes('negotiation')) {
+      return 'RFP';
+    }
+    if (t.includes('tender') || t.includes('procurement') || t.includes('bid') || t.includes('invitation for bid')) {
+      return 'Tender';
+    }
+    if (t.includes('partner')) {
+      return 'Partnership';
+    }
+    if (t.includes('grant') || t.includes('funding') || t.includes('call for')) {
+      return 'Grant';
+    }
+    return null;
+  };
+
+  if (item.content_kind === "news") {
+    return "News";
   }
-  if (text.includes('tender') || text.includes('procurement') || text.includes('bidding')) {
+
+  if (item.opportunity_type) {
+    const mapped = mapType(item.opportunity_type);
+    if (mapped) return mapped;
+  }
+
+  // Source-based defaults (procurement portals)
+  const sourceId = (item.source?.id || '').toLowerCase();
+  const tenderSources = [
+    'paktender',
+    'ungm',
+    'undp-pakistan-procurement',
+    'gcf-negotiations',
+    'adb-invitation-for-bids',
+    'adb-advanced-notices',
+    'adb-csrn',
+    'afdb-procurement',
+  ];
+  if (tenderSources.includes(sourceId)) {
     return 'Tender';
   }
-  if (text.includes('partnership') || text.includes('partner') || categories.includes('partnership')) {
-    return 'Partnership';
-  }
-  if (text.includes('grant') || text.includes('funding') || text.includes('call for')) {
-    return 'Grant';
-  }
-  
-  // Default to Grant for climate/funding content
+
+  const text = `${item.title} ${item.description}`.toLowerCase();
+  const categories = (item.categories || []).map(c => c.toLowerCase()).join(' ');
+  const fromText = mapType(`${text} ${categories}`);
+  if (fromText) return fromText;
+
+  // News / blogs without clear funding language — still Grant only as last resort
   return 'Grant';
 }
 
@@ -316,6 +403,29 @@ function extractDeadline(item: BackendFeedItem): string {
   
   // If no deadline found, use "Not specified"
   return 'Not specified';
+}
+
+/**
+ * Format pubDate (ISO datetime or date) for display
+ */
+function formatPubDateForDisplay(raw: string): string {
+  if (!raw || raw === "Not specified") return "";
+  try {
+    const trimmed = raw.trim();
+    // Prefer date part of ISO timestamps
+    const datePart = trimmed.match(/^(\d{4}-\d{2}-\d{2})/)?.[1];
+    if (datePart) {
+      return formatDeadlineForDisplay(datePart);
+    }
+    const date = new Date(trimmed);
+    if (!isNaN(date.getTime())) {
+      const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      return `${months[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`;
+    }
+  } catch {
+    // fall through
+  }
+  return raw.slice(0, 32);
 }
 
 /**
@@ -389,6 +499,47 @@ function inferRequiredAction(type: "Grant" | "RFP" | "Partnership" | "Tender"): 
 // Frontend cache to avoid refetching on every navigation
 let cachedOpportunities: { data: Opportunity[], timestamp: number, total: number } | null = null;
 const FRONTEND_CACHE_TTL = 2 * 60 * 1000; // 2 minutes in milliseconds
+const SESSION_CACHE_KEY = "ft_opportunities_by_id_v1";
+
+/** Store items so detail pages open instantly without another API call */
+export function cacheOpportunitiesById(opps: Opportunity[]): void {
+  try {
+    const map: Record<string, Opportunity> = {};
+    // Keep any previous session entries
+    const prev = sessionStorage.getItem(SESSION_CACHE_KEY);
+    if (prev) {
+      Object.assign(map, JSON.parse(prev));
+    }
+    for (const opp of opps) {
+      if (opp?.id) map[opp.id] = opp;
+    }
+    sessionStorage.setItem(SESSION_CACHE_KEY, JSON.stringify(map));
+  } catch (e) {
+    console.warn("Could not cache opportunities in sessionStorage", e);
+  }
+}
+
+/** Instant lookup from memory or session (no network) */
+export function getCachedOpportunity(id: string): Opportunity | null {
+  if (cachedOpportunities?.data) {
+    const hit = cachedOpportunities.data.find((o) => o.id === id);
+    if (hit) return hit;
+  }
+  try {
+    const raw = sessionStorage.getItem(SESSION_CACHE_KEY);
+    if (!raw) return null;
+    const map = JSON.parse(raw) as Record<string, Opportunity>;
+    const hit = map[id];
+    if (!hit) return null;
+    // Revive Date if it was serialized
+    if (hit.deadlineDate && typeof hit.deadlineDate === "string") {
+      hit.deadlineDate = new Date(hit.deadlineDate);
+    }
+    return hit;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Fetch all opportunities from the backend
@@ -422,13 +573,14 @@ export async function fetchOpportunities(limit: number = 500, offset: number = 0
     
     // Transform backend data to frontend format
     const allOpportunities = data.data.map(transformFeedToOpportunity);
-    
-    // Cache the full dataset
+
+    // Cache for list + detail (memory + session)
     cachedOpportunities = {
       data: allOpportunities,
       timestamp: Date.now(),
       total: data.total
     };
+    cacheOpportunitiesById(allOpportunities);
     
     // Return the requested slice
     return allOpportunities.slice(offset, offset + limit);
@@ -441,6 +593,41 @@ export async function fetchOpportunities(limit: number = 500, offset: number = 0
     }
     // Return empty array on error (fail-safe design)
     return [];
+  }
+}
+
+/**
+ * Resolve one opportunity for the detail page.
+ * Order: memory/session cache first (instant), then DB by id — never re-scrapes.
+ */
+export async function fetchOpportunityById(id: string): Promise<Opportunity | null> {
+  const cached = getCachedOpportunity(id);
+  if (cached) {
+    return cached;
+  }
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/feeds/item/${encodeURIComponent(id)}`);
+
+    if (response.status === 404) {
+      return null;
+    }
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch opportunity: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    if (!data.success || !data.data) {
+      return null;
+    }
+
+    const opp = transformFeedToOpportunity(data.data as BackendFeedItem);
+    cacheOpportunitiesById([opp]);
+    return opp;
+  } catch (error) {
+    console.error('Error fetching opportunity by id:', error);
+    throw error;
   }
 }
 
@@ -470,7 +657,7 @@ export async function fetchOpportunitiesBySource(sourceId: string): Promise<Oppo
 }
 
 /**
- * Fetch all sources from the backend
+ * Fetch all sources from the backend (fast — no live scrape)
  */
 export async function fetchSources(): Promise<BackendSource[]> {
   try {
@@ -494,6 +681,24 @@ export async function fetchSources(): Promise<BackendSource[]> {
 }
 
 /**
+ * Turn a source on/off for daily + Re-run ingest
+ */
+export async function toggleSourceEnabled(sourceId: string, enabled: boolean): Promise<BackendSource | null> {
+  const response = await fetch(
+    `${API_BASE_URL}/sources/${encodeURIComponent(sourceId)}/toggle?enabled=${enabled}`,
+    { method: 'POST' }
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to update source: ${response.statusText}`);
+  }
+  const data = await response.json();
+  if (!data.success) {
+    throw new Error('API returned unsuccessful response');
+  }
+  return data;
+}
+
+/**
  * Health check - verify backend is running
  */
 export async function checkBackendHealth(): Promise<boolean> {
@@ -505,4 +710,68 @@ export async function checkBackendHealth(): Promise<boolean> {
     console.error('Backend health check failed:', error);
     return false;
   }
+}
+
+export interface IngestResult {
+  success: boolean;
+  trigger?: string;
+  items?: number;
+  upserted?: number;
+  news_deleted?: number;
+  sources_ok?: number;
+  sources_error?: number;
+  message?: string;
+  warning?: string;
+  running?: boolean;
+  error?: string;
+}
+
+export interface IngestStatusResponse {
+  success: boolean;
+  last_ingest?: IngestResult & { finished_at?: string; started_at?: string };
+  seconds_until_next_7am_pkt?: number;
+  missed_todays_7am_pkt?: boolean;
+  timezone?: string;
+  hint?: string;
+}
+
+export async function fetchIngestStatus(): Promise<IngestStatusResponse | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/feeds/ingest-status`);
+    if (!response.ok) return null;
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Manually re-run scrape/RSS (same job as the daily 07:00 PKT schedule).
+ * Can take several minutes — show a loading state in the UI.
+ */
+export async function triggerFeedRefresh(): Promise<IngestResult> {
+  // Clear frontend cache so the next list load sees fresh DB rows
+  cachedOpportunities = null;
+
+  const response = await fetch(`${API_BASE_URL}/feeds/refresh`, {
+    method: 'POST',
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (response.status === 409) {
+    return {
+      success: false,
+      running: true,
+      message: data?.message || data?.detail?.message || 'Ingest already running',
+    };
+  }
+
+  if (!response.ok) {
+    throw new Error(
+      data?.detail?.error || data?.error || data?.message || `Refresh failed (${response.status})`
+    );
+  }
+
+  return data as IngestResult;
 }

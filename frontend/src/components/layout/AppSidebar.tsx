@@ -1,14 +1,17 @@
+import { useState, useEffect } from "react";
 import { 
   LayoutDashboard, 
   FileSearch, 
   Bell, 
   Database,
-  Users
+  Users,
+  RefreshCw,
 } from "lucide-react";
 import { NavLink, useLocation } from "react-router-dom";
 import {
   Sidebar,
   SidebarContent,
+  SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
   SidebarHeader,
@@ -17,6 +20,9 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar";
+import { Button } from "@/components/ui/button";
+import { useToast } from "@/hooks/use-toast";
+import { triggerFeedRefresh, fetchIngestStatus } from "@/services/api";
 import { cn } from "@/lib/utils";
 
 const navItems = [
@@ -31,6 +37,73 @@ export function AppSidebar() {
   const { state } = useSidebar();
   const collapsed = state === "collapsed";
   const location = useLocation();
+  const { toast } = useToast();
+  const [refreshing, setRefreshing] = useState(false);
+  const [ingestHint, setIngestHint] = useState<string>("");
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadStatus() {
+      const status = await fetchIngestStatus();
+      if (cancelled || !status?.last_ingest) return;
+      const last = status.last_ingest;
+      if (last.success === false) {
+        setIngestHint(`Last run failed${last.sources_error ? ` (${last.sources_error} source errors)` : ""}`);
+      } else if (status.missed_todays_7am_pkt) {
+        setIngestHint("Today's 7AM PKT run missed");
+      } else if (last.warning) {
+        setIngestHint(last.warning);
+      } else {
+        setIngestHint(
+          `Last OK · ${last.upserted ?? last.items ?? 0} saved` +
+            (last.sources_error ? ` · ${last.sources_error} errors` : "")
+        );
+      }
+    }
+    loadStatus();
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshing]);
+
+  async function handleRerun() {
+    if (refreshing) return;
+    setRefreshing(true);
+    toast({
+      title: "Refresh started",
+      description: "Scraping sources — this can take a few minutes.",
+    });
+    try {
+      const result = await triggerFeedRefresh();
+      if (result.running) {
+        toast({
+          title: "Already running",
+          description: "A refresh is already in progress. Wait for it to finish.",
+        });
+        return;
+      }
+      if (!result.success) {
+        toast({
+          title: "Refresh finished with errors",
+          description: result.error || `${result.sources_error ?? 0} sources failed`,
+          variant: "destructive",
+        });
+        return;
+      }
+      toast({
+        title: "Refresh complete",
+        description: `Saved ${result.upserted ?? result.items ?? 0} items · ${result.sources_ok ?? "?"} ok / ${result.sources_error ?? 0} errors · removed ${result.news_deleted ?? 0} old news.`,
+      });
+    } catch (err) {
+      toast({
+        title: "Refresh failed",
+        description: err instanceof Error ? err.message : "Could not re-run feeds",
+        variant: "destructive",
+      });
+    } finally {
+      setRefreshing(false);
+    }
+  }
 
   return (
     <Sidebar collapsible="icon" className="border-r border-border bg-card">
@@ -77,6 +150,25 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>
+      <SidebarFooter className="p-2 border-t border-border">
+        <Button
+          variant="outline"
+          size={collapsed ? "icon" : "sm"}
+          className="w-full"
+          onClick={handleRerun}
+          disabled={refreshing}
+          title="Re-run scrape now (also runs daily at 7:00 AM Pakistan time)"
+        >
+          <RefreshCw className={cn("w-4 h-4", refreshing && "animate-spin", !collapsed && "mr-2")} />
+          {!collapsed && (refreshing ? "Refreshing…" : "Re-run feeds")}
+        </Button>
+        {!collapsed && (
+          <p className="text-[10px] text-muted-foreground px-1 pt-1 leading-snug">
+            Auto 7:00 AM PKT (+ catch-up on restart). News 3 days; grants stay.
+            {ingestHint ? ` ${ingestHint}.` : ""}
+          </p>
+        )}
+      </SidebarFooter>
     </Sidebar>
   );
 }

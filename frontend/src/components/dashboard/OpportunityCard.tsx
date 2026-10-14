@@ -7,9 +7,11 @@ interface OpportunityCardProps {
   title: string;
   source: string;
   country: string;
-  type: "Grant" | "RFP" | "Partnership" | "Tender";
+  type: "Grant" | "RFP" | "Partnership" | "Tender" | "News";
+  contentKind?: "news" | "opportunity";
   relevance: "High" | "Medium" | "Low";
   deadline: string;
+  dateLabel?: string;
   link?: string; // Link to original source
   onClick?: () => void;
 }
@@ -25,6 +27,7 @@ const typeStyles = {
   RFP: "bg-secondary text-secondary-foreground",
   Partnership: "bg-primary/80 text-primary-foreground",
   Tender: "bg-secondary/80 text-secondary-foreground",
+  News: "bg-muted text-muted-foreground",
 };
 
 export function OpportunityCard({
@@ -32,8 +35,10 @@ export function OpportunityCard({
   source,
   country,
   type,
+  contentKind = "opportunity",
   relevance,
   deadline,
+  dateLabel = "Date",
   link,
   onClick,
 }: OpportunityCardProps) {
@@ -66,9 +71,13 @@ export function OpportunityCard({
             <h3 className="font-medium text-foreground line-clamp-2 flex-1">
               {title}
             </h3>
-            <Badge className={cn("shrink-0", typeStyles[type])}>
-              {type}
-            </Badge>
+            {contentKind === "news" ? (
+              <Badge variant="secondary" className="shrink-0">News</Badge>
+            ) : (
+              <Badge className={cn("shrink-0", typeStyles[type])}>
+                {type}
+              </Badge>
+            )}
           </div>
 
           <div className="flex flex-wrap items-center gap-4 text-sm text-muted-foreground">
@@ -82,7 +91,10 @@ export function OpportunityCard({
             </div>
             <div className="flex items-center gap-1.5">
               <Calendar className="w-4 h-4" />
-              <span>{deadline}</span>
+              <span>
+                {dateLabel !== "Date" ? `${dateLabel}: ` : ""}
+                {deadline}
+              </span>
             </div>
           </div>
 

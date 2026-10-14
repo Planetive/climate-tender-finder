@@ -123,9 +123,15 @@ const Index = () => {
                   country={opportunity.country}
                   type={opportunity.type}
                   relevance={opportunity.relevance}
-                  deadline={opportunity.deadline}
+                  deadline={opportunity.dateDisplay || opportunity.deadline}
+                  dateLabel={opportunity.dateLabel}
+                  contentKind={opportunity.contentKind}
                   link={opportunity.link}
-                  onClick={() => navigate(`/opportunities/${opportunity.id}`)}
+                  onClick={() =>
+                    navigate(`/opportunities/${opportunity.id}`, {
+                      state: { opportunity },
+                    })
+                  }
                 />
               ))}
             </div>

@@ -18,6 +18,11 @@ frontend/.env.local
 frontend/.env.*.local
 !frontend/.env.example
 
+# Runtime source on/off toggles + health (created by the API)
+config/source_settings.json
+config/source_health.json
+config/ingest_status.json
+
 # IDE
 .vscode/
 .idea/

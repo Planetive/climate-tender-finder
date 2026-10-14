@@ -9,7 +9,7 @@ import re
 import httpx
 from bs4 import BeautifulSoup
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CacheMode, VirtualScrollConfig
-from services.content_filter import filter_relevant_content
+from services.content_filter import filter_relevant_content, passes_content_filters, matches_target_geography
 
 # Fix Windows encoding (event loop policy is set in main.py before uvicorn starts)
 if sys.platform == 'win32':
@@ -769,7 +769,8 @@ async def scrape_ungm_with_scroll(url_config: Dict[str, Any]) -> List[Dict[str, 
     """
     url = url_config["url"]
     keywords = url_config.get("keywords", [])
-    skip_keyword = url_config.get("skip_keyword_filter") or url_config.get("skip_ai_filter")
+    # Geography always applies; skip_keyword_filter only skips climate keyword gate
+    skip_keyword = bool(url_config.get("skip_keyword_filter"))
     scraped_items: List[Dict[str, Any]] = []
 
     print("  Detected UNGM — browser scroll scrape...")
@@ -834,30 +835,11 @@ async def scrape_ungm_with_scroll(url_config: Dict[str, Any]) -> List[Dict[str, 
                 if deadline and len(deadline) == 10 and deadline < today:
                     continue
 
-                if skip_keyword:
-                    scraped_items.append(item)
+                # Pakistan / MENA / Global only (drop other countries)
+                if not matches_target_geography(item):
                     continue
 
-                is_relevant = filter_relevant_content(item, keywords)
-
-                if not is_relevant:
-                    beneficiary = item.get("beneficiary_country", "").lower()
-                    if beneficiary:
-                        region_keywords = [
-                            "pakistan", "mena", "middle east", "north africa",
-                            "arab", "gulf", "saudi", "uae", "egypt", "jordan", "lebanon",
-                        ]
-                        if any(region in beneficiary for region in region_keywords):
-                            is_relevant = True
-
-                if not is_relevant:
-                    has_org = item.get("organization", "")
-                    has_type = item.get("opportunity_type", "")
-                    has_beneficiary = item.get("beneficiary_country", "")
-                    if has_org and has_type and has_beneficiary:
-                        is_relevant = True
-
-                if is_relevant:
+                if skip_keyword or filter_relevant_content(item, keywords):
                     scraped_items.append(item)
 
             print(
@@ -1806,24 +1788,20 @@ async def scrape_single_url(url_config: Dict[str, Any]) -> List[Dict[str, Any]]:
             "image": main_image
         }
         
-        # Filter for relevant content
-        if filter_relevant_content(item, keywords):
+        # Climate keywords (unless skipped) + Pakistan / MENA / Global geography
+        skip_kw = bool(url_config.get("skip_keyword_filter"))
+        if passes_content_filters(item, keywords, skip_keyword_filter=skip_kw):
             scraped_items.append(item)
             print(f"✓ {url_config['name']}: Found 1 relevant item")
         else:
-            print(f"⚠ {url_config['name']}: Content not relevant (filtered out)")
+            print(f"⚠ {url_config['name']}: Content not relevant / out of geography (filtered out)")
         
         return scraped_items
-        
+
     except Exception as error:
+        # Re-raise so ingest can mark this source as error (not silent empty)
         print(f"✗ Error scraping {url_config['name']}: {str(error)}")
-        return []
-        
-        return scraped_items
-        
-    except Exception as error:
-        print(f"✗ Error scraping {url_config['name']}: {str(error)}")
-        return []
+        raise
 
 
 async def scrape_multiple_urls(url_configs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -1836,14 +1814,16 @@ async def scrape_multiple_urls(url_configs: List[Dict[str, Any]]) -> List[Dict[s
     Returns:
         List of scraped and filtered items, sorted by date (newest first)
     """
-    # Scrape all URLs concurrently
+    # Scrape all URLs concurrently; isolate failures per source
     tasks = [scrape_single_url(url_config) for url_config in url_configs]
-    results = await asyncio.gather(*tasks)
-    
-    # Flatten all items into a single list
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
     all_items = []
-    for items in results:
-        all_items.extend(items)
+    for url_config, result in zip(url_configs, results):
+        if isinstance(result, Exception):
+            print(f"✗ Skipping failed scrape {url_config.get('name')}: {result}")
+            continue
+        all_items.extend(result)
     
     # Sort by publication date (newest first)
     all_items.sort(
