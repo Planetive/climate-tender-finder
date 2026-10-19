@@ -7,7 +7,7 @@ interface OpportunityCardProps {
   title: string;
   source: string;
   country: string;
-  type: "Grant" | "RFP" | "Partnership" | "Tender" | "News";
+  type: "Grant" | "RFP" | "Partnership" | "Tender" | "Accelerator" | "Funding" | "News";
   contentKind?: "news" | "opportunity";
   relevance: "High" | "Medium" | "Low";
   deadline: string;
@@ -27,6 +27,8 @@ const typeStyles = {
   RFP: "bg-secondary text-secondary-foreground",
   Partnership: "bg-primary/80 text-primary-foreground",
   Tender: "bg-secondary/80 text-secondary-foreground",
+  Accelerator: "bg-primary/70 text-primary-foreground",
+  Funding: "bg-secondary/70 text-secondary-foreground",
   News: "bg-muted text-muted-foreground",
 };
 

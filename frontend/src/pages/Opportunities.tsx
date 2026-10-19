@@ -236,6 +236,8 @@ export default function Opportunities() {
                 { value: "RFP", label: "RFP" },
                 { value: "Partnership", label: "Partnership" },
                 { value: "Tender", label: "Tender" },
+                { value: "Accelerator", label: "Accelerator" },
+                { value: "Funding", label: "Funding" },
                 { value: "News", label: "News" },
               ]}
             />

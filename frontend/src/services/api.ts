@@ -93,7 +93,7 @@ export interface Opportunity {
   source: string;
   country: string;
   region: string;
-  type: "Grant" | "RFP" | "Partnership" | "Tender" | "News";
+  type: "Grant" | "RFP" | "Partnership" | "Tender" | "Accelerator" | "Funding" | "News";
   /** news = articles/updates; opportunity = grants/tenders/procurement */
   contentKind: "news" | "opportunity";
   relevance: "High" | "Medium" | "Low";
@@ -330,23 +330,38 @@ function extractRegion(item: BackendFeedItem, country: string): string {
  * Infer opportunity type from feed item.
  * Prefer backend opportunity_type / source, so tenders are not mislabeled as Grant.
  */
-function inferOpportunityType(item: BackendFeedItem): "Grant" | "RFP" | "Partnership" | "Tender" | "News" {
-  const mapType = (raw: string): "Grant" | "RFP" | "Partnership" | "Tender" | "News" | null => {
+type OppType = "Grant" | "RFP" | "Partnership" | "Tender" | "Accelerator" | "Funding" | "News";
+
+function inferOpportunityType(item: BackendFeedItem): OppType {
+  const mapType = (raw: string): OppType | null => {
     const t = raw.toLowerCase();
     if (t === "news" || t.includes("news")) {
       return "News";
     }
-    if (t.includes('rfp') || t.includes('request for proposal') || t.includes('rfq') || t.includes('negotiation')) {
-      return 'RFP';
+    if (t.includes("accelerat") || t.includes("incubator")) {
+      return "Accelerator";
     }
-    if (t.includes('tender') || t.includes('procurement') || t.includes('bid') || t.includes('invitation for bid')) {
-      return 'Tender';
+    if (
+      t.includes("rfp") ||
+      t.includes("request for proposal") ||
+      t.includes("rfq") ||
+      t.includes("negotiation") ||
+      t.includes("expression of interest") ||
+      t.includes("eoi")
+    ) {
+      return "RFP";
     }
-    if (t.includes('partner')) {
-      return 'Partnership';
+    if (t.includes("tender") || t.includes("procurement") || t.includes("bid") || t.includes("invitation for bid")) {
+      return "Tender";
     }
-    if (t.includes('grant') || t.includes('funding') || t.includes('call for')) {
-      return 'Grant';
+    if (t.includes("partner")) {
+      return "Partnership";
+    }
+    if (t.includes("startup funding") || t.includes("seed fund") || t === "funding") {
+      return "Funding";
+    }
+    if (t.includes("grant") || t.includes("funding") || t.includes("call for")) {
+      return "Grant";
     }
     return null;
   };
@@ -361,28 +376,33 @@ function inferOpportunityType(item: BackendFeedItem): "Grant" | "RFP" | "Partner
   }
 
   // Source-based defaults (procurement portals)
-  const sourceId = (item.source?.id || '').toLowerCase();
+  const sourceId = (item.source?.id || "").toLowerCase();
   const tenderSources = [
-    'paktender',
-    'ungm',
-    'undp-pakistan-procurement',
-    'gcf-negotiations',
-    'adb-invitation-for-bids',
-    'adb-advanced-notices',
-    'adb-csrn',
-    'afdb-procurement',
+    "paktender",
+    "ungm",
+    "undp-pakistan-procurement",
+    "gcf-negotiations",
+    "adb-invitation-for-bids",
+    "adb-advanced-notices",
+    "adb-csrn",
+    "afdb-procurement",
+    "isdb-procurement",
   ];
   if (tenderSources.includes(sourceId)) {
-    return 'Tender';
+    const text = `${item.title} ${item.description}`.toLowerCase();
+    if (text.includes("expression of interest") || text.includes("eoi") || text.includes("rfp")) {
+      return "RFP";
+    }
+    return "Tender";
   }
 
   const text = `${item.title} ${item.description}`.toLowerCase();
-  const categories = (item.categories || []).map(c => c.toLowerCase()).join(' ');
+  const categories = (item.categories || []).map((c) => c.toLowerCase()).join(" ");
   const fromText = mapType(`${text} ${categories}`);
   if (fromText) return fromText;
 
   // News / blogs without clear funding language — still Grant only as last resort
-  return 'Grant';
+  return "Grant";
 }
 
 /**
@@ -532,17 +552,21 @@ function parsePublishedDate(raw: string): Date {
 /**
  * Infer required action based on opportunity type
  */
-function inferRequiredAction(type: "Grant" | "RFP" | "Partnership" | "Tender"): string {
+function inferRequiredAction(type: OppType): string {
   switch (type) {
-    case 'RFP':
-      return 'Submit Proposal';
-    case 'Tender':
-      return 'Submit Bid';
-    case 'Partnership':
-      return 'Partner Application';
-    case 'Grant':
+    case "RFP":
+      return "Submit Proposal";
+    case "Tender":
+      return "Submit Bid";
+    case "Partnership":
+      return "Partner Application";
+    case "Accelerator":
+      return "Apply to Program";
+    case "Funding":
+      return "Submit Funding Application";
+    case "Grant":
     default:
-      return 'Submit Application';
+      return "Submit Application";
   }
 }
 
@@ -765,6 +789,16 @@ export async function checkBackendHealth(): Promise<boolean> {
   }
 }
 
+/** One source’s result from a full ingest run */
+export interface IngestSourceResult {
+  id?: string;
+  name?: string;
+  status?: "ok" | "error" | string;
+  items?: number;
+  items_raw?: number;
+  error?: string;
+}
+
 export interface IngestResult {
   success: boolean;
   trigger?: string;
@@ -772,8 +806,12 @@ export interface IngestResult {
   items_raw?: number;
   upserted?: number;
   news_deleted?: number;
+  sources_run?: number;
   sources_ok?: number;
   sources_error?: number;
+  sources_skipped?: number;
+  /** Per-source outcomes from the last full run */
+  sources?: IngestSourceResult[];
   source_id?: string;
   source_name?: string;
   message?: string;

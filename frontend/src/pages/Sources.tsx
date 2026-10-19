@@ -46,6 +46,23 @@ function formatLastSync(iso: string | null | undefined): string {
   }
 }
 
+/** Human label for how the last ingest was started */
+function formatTriggerLabel(trigger?: string | null): string {
+  switch (trigger) {
+    case "schedule_7am_pkt":
+      return "Automatic (7:00 AM PKT)";
+    case "catch_up":
+    case "startup_catchup":
+      return "Catch-up after missed 7:00 AM";
+    case "manual":
+      return "Manual (Run scrape now)";
+    case "source_toggle":
+      return "Single source (turned on)";
+    default:
+      return trigger ? `Trigger: ${trigger}` : "Unknown trigger";
+  }
+}
+
 export default function Sources() {
   const { toast } = useToast();
   const [sources, setSources] = useState<Source[]>([]);
@@ -286,33 +303,88 @@ export default function Sources() {
           </Card>
         )}
 
-        {/* Ingest health banner */}
+        {/* Ingest health banner — shows automatic + manual runs */}
         {!loading && last && (
           <Card className={cn(
             "border",
             last.success === false ? "border-destructive/40 bg-destructive/5" : "border-border bg-card"
           )}>
-            <CardContent className="p-4 text-sm space-y-1">
-              <p className="font-medium text-foreground">
-                Last ingest: {last.success === false ? "Failed" : "OK"}
-                {last.trigger ? ` (${last.trigger})` : ""}
-              </p>
-              <p className="text-muted-foreground">
-                {last.finished_at ? formatLastSync(last.finished_at) : "—"}
-                {" · "}
-                {last.upserted ?? last.items ?? 0} saved
-                {" · "}
-                {last.sources_ok ?? "—"} ok / {last.sources_error ?? 0} errors
-                {typeof ingest?.seconds_until_next_7am_pkt === "number" && (
-                  <> · next 7:00 PKT in ~{Math.round((ingest.seconds_until_next_7am_pkt || 0) / 3600)}h</>
-                )}
-              </p>
-              {last.error && <p className="text-destructive">{last.error}</p>}
-              {last.warning && <p className="text-amber-700 dark:text-amber-400">{last.warning}</p>}
-              {ingest?.missed_todays_7am_pkt && (
-                <p className="text-amber-700 dark:text-amber-400">
-                  Today&apos;s 7:00 AM PKT run looks missed — use Re-run feeds or wait for catch-up on restart.
+            <CardContent className="p-4 text-sm space-y-3">
+              <div className="space-y-1">
+                <p className="font-medium text-foreground">
+                  Last ingest: {last.success === false ? "Failed" : "OK"}
+                  {" · "}
+                  {formatTriggerLabel(last.trigger)}
                 </p>
+                <p className="text-muted-foreground">
+                  Finished: {last.finished_at ? formatLastSync(last.finished_at) : "—"}
+                  {" · "}
+                  {last.upserted ?? last.items ?? 0} saved
+                  {" · "}
+                  {last.sources_ok ?? "—"} ok / {last.sources_error ?? 0} errors
+                  {typeof last.sources_run === "number" && (
+                    <> · {last.sources_run} sources run</>
+                  )}
+                  {typeof ingest?.seconds_until_next_7am_pkt === "number" && (
+                    <> · next 7:00 PKT in ~{Math.round((ingest.seconds_until_next_7am_pkt || 0) / 3600)}h</>
+                  )}
+                </p>
+                {last.error && <p className="text-destructive">{last.error}</p>}
+                {last.warning && <p className="text-amber-700 dark:text-amber-400">{last.warning}</p>}
+                {ingest?.missed_todays_7am_pkt && (
+                  <p className="text-amber-700 dark:text-amber-400">
+                    Today&apos;s 7:00 AM PKT run looks missed — use Run scrape now or wait for catch-up on restart.
+                  </p>
+                )}
+              </div>
+
+              {/* Per-source results from that run (errors first) */}
+              {Array.isArray(last.sources) && last.sources.length > 0 && (
+                <details className="rounded-md border border-border bg-background/50 p-3">
+                  <summary className="cursor-pointer font-medium text-foreground select-none">
+                    Source results from this run ({last.sources.length})
+                  </summary>
+                  <ul className="mt-3 space-y-2 max-h-64 overflow-y-auto">
+                    {[...last.sources]
+                      .sort((a, b) => {
+                        const ae = a.status === "error" ? 0 : 1;
+                        const be = b.status === "error" ? 0 : 1;
+                        return ae - be;
+                      })
+                      .map((s) => (
+                        <li
+                          key={s.id || s.name}
+                          className="flex flex-col gap-0.5 text-xs border-b border-border/60 pb-2 last:border-0 last:pb-0"
+                        >
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-medium text-foreground">
+                              {s.name || s.id || "Unknown source"}
+                            </span>
+                            <Badge
+                              variant="outline"
+                              className={cn(
+                                "text-[10px]",
+                                s.status === "error"
+                                  ? "border-destructive/40 text-destructive"
+                                  : "border-primary/30 text-primary"
+                              )}
+                            >
+                              {s.status === "error" ? "Error" : "OK"}
+                            </Badge>
+                            <span className="text-muted-foreground">
+                              kept {s.items ?? 0}
+                              {typeof s.items_raw === "number" ? ` / raw ${s.items_raw}` : ""}
+                            </span>
+                          </div>
+                          {s.error && (
+                            <p className="text-destructive truncate" title={s.error}>
+                              {s.error}
+                            </p>
+                          )}
+                        </li>
+                      ))}
+                  </ul>
+                </details>
               )}
             </CardContent>
           </Card>

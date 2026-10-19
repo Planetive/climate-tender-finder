@@ -116,6 +116,8 @@ export function TopNav() {
                     <SelectItem value="RFP">RFP</SelectItem>
                     <SelectItem value="Partnership">Partnership</SelectItem>
                     <SelectItem value="Tender">Tender</SelectItem>
+                    <SelectItem value="Accelerator">Accelerator</SelectItem>
+                    <SelectItem value="Funding">Funding</SelectItem>
                   </SelectContent>
                 </Select>
               </div>

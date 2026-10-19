@@ -36,19 +36,23 @@ def _whole_word(term: str, text: str) -> bool:
 
 
 def infer_opportunity_type(item: Dict[str, Any], content_kind: str) -> str:
-    """Return Grant | RFP | Partnership | Tender | News."""
+    """Return Grant | RFP | Partnership | Tender | Accelerator | Funding | News."""
     if content_kind == "news":
         return "News"
 
     existing = (item.get("opportunity_type") or "").strip()
     if existing:
         t = existing.lower()
-        if "rfp" in t or "rfq" in t or "proposal" in t or "negotiation" in t:
+        if "accelerat" in t or "incubator" in t:
+            return "Accelerator"
+        if "rfp" in t or "rfq" in t or "proposal" in t or "negotiation" in t or "eoi" in t:
             return "RFP"
         if "tender" in t or "procurement" in t or "bid" in t or "invitation" in t:
             return "Tender"
         if "partner" in t:
             return "Partnership"
+        if "funding" in t and "grant" not in t:
+            return "Funding"
         if "grant" in t or "funding" in t:
             return "Grant"
         if "news" in t:
@@ -65,20 +69,54 @@ def infer_opportunity_type(item: Dict[str, Any], content_kind: str) -> str:
         "adb-advanced-notices",
         "adb-csrn",
         "afdb-procurement",
+        "isdb-procurement",
+        "opec-fund-procurement",
+        "undp-procurement-pk-uae",
     }
+    grant_sources = {
+        "akrsp-grants",
+    }
+    accelerator_sources = {
+        "hub71-climatetech",
+        "catalyst-uae",
+        "accelerate-prosperity-csi",
+        "clip-pakistan",
+        "digital-pakistan-climate-tech",
+        "nic-karachi-ignite",
+    }
+    funding_sources = {
+        "cfa-pakistan",
+    }
+    existing_type = (item.get("opportunity_type") or "").strip().lower()
+    if sid in funding_sources or existing_type == "funding":
+        return "Funding"
+    if sid in accelerator_sources or existing_type == "accelerator":
+        return "Accelerator"
+    if sid in grant_sources:
+        return "Grant"
     if sid in tender_sources:
         text = _blob(item)
-        if "rfp" in text or "request for proposal" in text or "rfq" in text:
+        if (
+            "rfp" in text
+            or "request for proposal" in text
+            or "rfq" in text
+            or "expression of interest" in text
+            or "eoi" in text
+        ):
             return "RFP"
         return "Tender"
 
     text = _blob(item)
-    if "rfp" in text or "request for proposal" in text:
+    if "accelerat" in text or "incubator" in text:
+        return "Accelerator"
+    if "rfp" in text or "request for proposal" in text or "expression of interest" in text:
         return "RFP"
     if "tender" in text or "procurement" in text or "bidding" in text:
         return "Tender"
     if "partnership" in text or "partner with" in text:
         return "Partnership"
+    if "startup funding" in text or "seed fund" in text or "venture" in text:
+        return "Funding"
     if "grant" in text or "funding call" in text or "call for proposals" in text:
         return "Grant"
     return "Grant"

@@ -27,11 +27,13 @@ const relevanceStyles = {
   Low: "bg-muted/50 text-muted-foreground border-border",
 };
 
-const typeStyles = {
+const typeStyles: Record<string, string> = {
   Grant: "bg-primary text-primary-foreground",
   RFP: "bg-secondary text-secondary-foreground",
   Partnership: "bg-primary/80 text-primary-foreground",
   Tender: "bg-secondary/80 text-secondary-foreground",
+  Accelerator: "bg-primary/70 text-primary-foreground",
+  Funding: "bg-secondary/70 text-secondary-foreground",
   News: "bg-muted text-muted-foreground",
 };
 

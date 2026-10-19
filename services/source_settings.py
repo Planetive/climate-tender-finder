@@ -88,6 +88,22 @@ def source_category(feed: Dict[str, Any]) -> str:
     # Opportunities
     if "paktender" in sid or "secp" in sid:
         return "Pakistan Procurement"
+    if "isdb" in sid:
+        return "IsDB Procurement"
+    if "opec" in sid:
+        return "OPEC Fund"
+    if "akrsp" in sid:
+        return "Pakistan Grants"
+    if "hub71" in sid or "catalyst" in sid:
+        return "UAE Accelerators"
+    if (
+        "accelerate-prosperity" in sid
+        or "clip-pakistan" in sid
+        or "digital-pakistan" in sid
+        or "nic-karachi" in sid
+        or sid == "cfa-pakistan"
+    ):
+        return "Pakistan Accelerators"
     if "undp" in sid:
         return "UN Procurement"
     if "ungm" in sid:
@@ -98,4 +114,6 @@ def source_category(feed: Dict[str, Any]) -> str:
         return "ADB Procurement"
     if "afdb" in sid:
         return "AfDB Procurement"
+    if "accelerat" in name or "incubator" in name:
+        return "Accelerators"
     return "Funding & Tenders"

@@ -1855,6 +1855,12 @@ async def scrape_single_url(url_config: Dict[str, Any]) -> List[Dict[str, Any]]:
         ):
             return await scrape_worldbank_news_api(url_config)
 
+        # UNDP official procurement RSS — Pakistan + UAE (check id before generic UNDP URL match)
+        if url_config.get("id") == "undp-procurement-pk-uae":
+            from services.undp_notices_service import scrape_undp_pk_uae_notices
+
+            return await scrape_undp_pk_uae_notices(url_config)
+
         # UNDP Pakistan procurement — JSON feed via public-components (no browser needed)
         if "undp.org" in url.lower() and "procurement" in url.lower():
             return await scrape_undp_pakistan_procurement(url_config)
@@ -1872,6 +1878,30 @@ async def scrape_single_url(url_config: Dict[str, Any]) -> List[Dict[str, Any]]:
         # PakTender — plain HTTP table (pages 1–2); skip keyword filter in dedicated path
         if "paktender.com" in url.lower() or url_config.get("id") == "paktender":
             return await scrape_paktender_pages(url_config)
+
+        # IsDB — Pakistan + UAE taxonomy listings (server-rendered)
+        if url_config.get("id") == "isdb-procurement" or "isdb.org/project-procurement" in url.lower():
+            from services.isdb_service import scrape_isdb_procurement
+
+            return await scrape_isdb_procurement(url_config)
+
+        # OPEC Fund — project (PK/UAE) + HQ consulting REOIs
+        if url_config.get("id") == "opec-fund-procurement" or "opecfund.org" in url.lower():
+            from services.opec_fund_service import scrape_opec_fund
+
+            return await scrape_opec_fund(url_config)
+
+        # AKRSP Pakistan climate / community grants
+        if url_config.get("id") == "akrsp-grants" or "akrsp.org.pk" in url.lower():
+            from services.akrsp_grants_service import scrape_akrsp_grants
+
+            return await scrape_akrsp_grants(url_config)
+
+        # Climate accelerators (Hub71, Catalyst, CLIP, Accelerate Prosperity, …)
+        if url_config.get("crawler") == "accelerator" or url_config.get("content_subtype") == "accelerator":
+            from services.accelerator_service import scrape_accelerator_program
+
+            return await scrape_accelerator_program(url_config)
 
         # UNGM — JS table needs browser scroll; dedicated path (not generic Crawl4AI first)
         if "ungm.org" in url.lower() or url_config.get("id") == "ungm":

@@ -46,6 +46,13 @@ PAKISTAN_SOURCE_IDS = {
     "paktender",
     "propakistani-business",
     "undp-pakistan-procurement",
+    "undp-procurement-pk-uae",
+    "akrsp-grants",
+    "accelerate-prosperity-csi",
+    "clip-pakistan",
+    "digital-pakistan-climate-tech",
+    "nic-karachi-ignite",
+    "cfa-pakistan",
     "secp-notifications",
 }
 # MENA business news (example crawlers) — keep whole feed without per-article geo guess
@@ -53,9 +60,27 @@ MENA_BUSINESS_NEWS_SOURCE_IDS = {
     "arab-news-economy",
     "khaleej-times-business",
 }
+MENA_ACCELERATOR_SOURCE_IDS = {
+    "hub71-climatetech",
+    "catalyst-uae",
+}
 # GCF is climate finance by definition — keep even when country says Global
 GLOBAL_CLIMATE_SOURCE_IDS = {
     "gcf-negotiations",
+}
+# HQ / international IFIs that PK + UAE offices can still bid on
+INTERNATIONAL_APPLY_SOURCE_IDS = {
+    "opec-fund-procurement",
+}
+# Climate accelerators scoped to PK / UAE offices
+ACCELERATOR_SOURCE_IDS = {
+    "hub71-climatetech",
+    "catalyst-uae",
+    "accelerate-prosperity-csi",
+    "clip-pakistan",
+    "digital-pakistan-climate-tech",
+    "nic-karachi-ignite",
+    "cfa-pakistan",
 }
 
 # --- Theme: ESG advisory + industrial clients --------------------------------
@@ -210,7 +235,10 @@ def matches_target_geography(item: Dict[str, Any]) -> bool:
     if (
         sid in PAKISTAN_SOURCE_IDS
         or sid in MENA_BUSINESS_NEWS_SOURCE_IDS
+        or sid in MENA_ACCELERATOR_SOURCE_IDS
+        or sid in ACCELERATOR_SOURCE_IDS
         or sid in GLOBAL_CLIMATE_SOURCE_IDS
+        or sid in INTERNATIONAL_APPLY_SOURCE_IDS
     ):
         return True
 
