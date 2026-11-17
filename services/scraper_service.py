@@ -1879,6 +1879,24 @@ async def scrape_single_url(url_config: Dict[str, Any]) -> List[Dict[str, Any]]:
         if "paktender.com" in url.lower() or url_config.get("id") == "paktender":
             return await scrape_paktender_pages(url_config)
 
+        # My Tender Notice — Pakistan active tenders + climate categories
+        if (
+            url_config.get("id") == "mytendernotice"
+            or "mytendernotice.com" in url.lower()
+        ):
+            from services.mytendernotice_service import scrape_mytendernotice
+
+            return await scrape_mytendernotice(url_config)
+
+        # PPRA ePMS — official active tenders (Closing dates)
+        if (
+            url_config.get("id") == "ppra-epms"
+            or "epms.ppra.gov.pk" in url.lower()
+        ):
+            from services.ppra_epms_service import scrape_ppra_epms
+
+            return await scrape_ppra_epms(url_config)
+
         # IsDB — Pakistan + UAE taxonomy listings (server-rendered)
         if url_config.get("id") == "isdb-procurement" or "isdb.org/project-procurement" in url.lower():
             from services.isdb_service import scrape_isdb_procurement

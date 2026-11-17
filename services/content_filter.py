@@ -44,6 +44,8 @@ OUT_OF_SCOPE_MARKERS = [
 # Sources already scoped to Pakistan (or a single global climate-finance portal)
 PAKISTAN_SOURCE_IDS = {
     "paktender",
+    "mytendernotice",
+    "ppra-epms",
     "propakistani-business",
     "undp-pakistan-procurement",
     "undp-procurement-pk-uae",

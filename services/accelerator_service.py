@@ -25,12 +25,12 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
-OPEN_PHRASES = (
+# Strong signals that applications are still open (not just a leftover button label)
+STRONG_OPEN_PHRASES = (
     "applications are now open",
     "applications open",
     "currently accepting applications",
     "accepting applications",
-    "apply now",
     "rolling basis",
     "reviewed on a rolling basis",
     "do not have a set deadline",
@@ -38,6 +38,13 @@ OPEN_PHRASES = (
     "next cohort is coming",
     "seats left",
 )
+
+# Weak signals — often leftover UI ("Apply Now" button) even after the deadline
+WEAK_OPEN_PHRASES = (
+    "apply now",
+)
+
+OPEN_PHRASES = STRONG_OPEN_PHRASES + WEAK_OPEN_PHRASES
 
 CLOSED_PHRASES = (
     "applications are closed",
@@ -141,18 +148,12 @@ def _is_open(
     keep_when_closed: bool = False,
 ) -> Tuple[bool, str]:
     low = text.lower()
-    looks_closed = any(p in low for p in CLOSED_PHRASES) and not any(
-        p in low for p in OPEN_PHRASES if p != "cohort"
-    )
-    # "rolling basis" / "apply now" beat closed wording
-    if looks_closed and any(
-        p in low
-        for p in (
-            "applications are now open",
-            "currently accepting applications",
-            "rolling basis",
-        )
-    ):
+    has_strong_open = any(p in low for p in STRONG_OPEN_PHRASES)
+    has_weak_open = any(p in low for p in WEAK_OPEN_PHRASES)
+    looks_closed = any(p in low for p in CLOSED_PHRASES) and not has_strong_open
+
+    # Strong open language beats closed wording; a lone "Apply Now" button does not
+    if looks_closed and has_strong_open:
         looks_closed = False
 
     if looks_closed:
@@ -164,14 +165,19 @@ def _is_open(
     if deadline_iso and deadline_iso >= today:
         return True, "deadline_open"
 
-    if any(p in low for p in OPEN_PHRASES) or force_open:
-        # Past cohort deadline but still accepting / rolling → keep
-        return True, "rolling_or_open"
-
+    # Past deadline: only treat as still-open if page clearly says rolling /
+    # still accepting (do NOT trust a leftover "Apply Now" button alone).
+    # Otherwise still emit with reason deadline_passed so upsert can fix a
+    # wrong "Published" date that was stored earlier.
     if deadline_iso and deadline_iso < today:
-        if keep_when_closed:
+        if has_strong_open:
+            return True, "rolling_or_open"
+        if keep_when_closed or force_open:
             return True, "watch_next_call"
-        return False, "deadline_passed"
+        return True, "deadline_passed"
+
+    if has_strong_open or has_weak_open or force_open:
+        return True, "rolling_or_open"
 
     # No deadline + no clear open signal → skip (avoid stale pages)
     if force_open or keep_when_closed:
@@ -223,6 +229,10 @@ def build_accelerator_item(
             "Applications are currently closed."
             + (f" {next_hint}." if next_hint else " Watch for the next call.")
         )
+    elif reason == "deadline_passed":
+        summary_bits.append(
+            f"Application deadline was {deadline} — this cohort window has closed."
+        )
     elif deadline:
         if reason == "rolling_or_open":
             summary_bits.append(
@@ -241,18 +251,28 @@ def build_accelerator_item(
     # Short excerpt from page (no inventing)
     excerpt = text[:900] + ("…" if len(text) > 900 else "")
 
+    # Always keep a real parsed deadline when we found one (never hide it behind "Published")
     if reason == "watch_next_call":
-        deadline_display = next_hint or "Closed — next call TBA"
-        deadline_out = None
+        deadline_display = next_hint or (
+            f"Closed — was {deadline}" if deadline else "Closed — next call TBA"
+        )
+        deadline_out = deadline  # may be past; still useful for the UI
+    elif reason == "deadline_passed":
+        deadline_display = deadline or "Closed"
+        deadline_out = deadline
     elif reason == "deadline_open":
         deadline_display = deadline or "Not specified"
         deadline_out = deadline
     elif reason == "rolling_or_open":
-        deadline_display = "Rolling / open"
-        deadline_out = None
+        if deadline:
+            deadline_display = deadline
+            deadline_out = deadline
+        else:
+            deadline_display = "Rolling / open"
+            deadline_out = None
     else:
-        deadline_display = "Not specified"
-        deadline_out = None
+        deadline_display = deadline or "Not specified"
+        deadline_out = deadline
 
     return {
         "id": _id(url),

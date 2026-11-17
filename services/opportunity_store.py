@@ -334,6 +334,85 @@ async def delete_ids(ids: List[str]) -> int:
         return deleted
 
 
+def _deadline_iso_day(raw: Any) -> Optional[str]:
+    """Normalize deadline to YYYY-MM-DD, or None if missing/unparseable."""
+    if not raw:
+        return None
+    text = str(raw).strip()
+    if len(text) >= 10 and text[4] == "-" and text[7] == "-":
+        return text[:10]
+    try:
+        from dateutil import parser as date_parser
+
+        return date_parser.parse(text, fuzzy=True).date().isoformat()
+    except Exception:
+        return None
+
+
+def is_past_deadline(item: Dict[str, Any], today: Optional[str] = None) -> bool:
+    """True when item has a real deadline strictly before today (UTC)."""
+    day = _deadline_iso_day(item.get("deadline"))
+    if not day:
+        return False
+    today = today or datetime.now(timezone.utc).date().isoformat()
+    return day < today
+
+
+async def delete_past_deadline_opportunities(
+    exclude_source_ids: Optional[List[str]] = None,
+) -> int:
+    """
+    Remove opportunity rows whose deadline date is already past.
+
+    Why: upsert never deletes — expired PakTender/ADB/etc. rows stayed in the UI.
+    News sources are excluded (they use pubDate retention, not deadlines).
+    """
+    if not _supabase_configured():
+        return 0
+
+    today = datetime.now(timezone.utc).date().isoformat()
+    exclude = set(exclude_source_ids or [])
+    url = f"{_rest_base()}/opportunities"
+    params = {
+        "select": "id,deadline,source_id",
+        "deadline": f"lt.{today}",
+        "limit": "5000",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.get(url, headers=_headers(), params=params)
+            if response.status_code >= 400:
+                print(
+                    f"⚠ Past-deadline list failed ({response.status_code}): "
+                    f"{response.text[:300]}"
+                )
+                return 0
+            rows = response.json()
+            if not isinstance(rows, list):
+                return 0
+
+        to_delete: List[str] = []
+        for row in rows:
+            sid = row.get("source_id") or ""
+            if sid in exclude:
+                continue
+            oid = row.get("id")
+            if oid and _deadline_iso_day(row.get("deadline")):
+                to_delete.append(str(oid))
+
+        if not to_delete:
+            print("✓ No past-deadline opportunities to purge")
+            return 0
+
+        deleted = await delete_ids(to_delete)
+        print(f"✓ Purged {deleted} past-deadline opportunities (before {today})")
+        return deleted
+    except Exception as e:
+        print(f"⚠ Past-deadline purge error: {e}")
+        return 0
+
+
 async def delete_stale_adb_opportunities(
     source_max_age: Dict[str, int],
 ) -> int:

@@ -142,6 +142,14 @@ function transformFeedToOpportunity(item: BackendFeedItem): Opportunity {
   if (item.deadline) {
     deadline = formatDeadlineForDisplay(item.deadline);
     deadlineDate = parseDeadlineDate(item.deadline);
+  } else if (
+    item.deadline_display &&
+    !/^not specified$/i.test(item.deadline_display.trim()) &&
+    !/^rolling\b/i.test(item.deadline_display.trim())
+  ) {
+    // Accelerator pages often set deadline_display even when ISO deadline was cleared
+    deadline = item.deadline_display;
+    deadlineDate = parseDeadlineDate(item.deadline_display);
   } else {
     deadline = extractDeadline(item);
     deadlineDate = parseDeadlineDate(deadline);
@@ -152,15 +160,27 @@ function transformFeedToOpportunity(item: BackendFeedItem): Opportunity {
   // Real calendar date for "new this week" KPIs — never invent a far-future date
   const publishedDate = parsePublishedDate(publishedRaw);
 
+  const statusDisplay =
+    item.deadline_display &&
+    (/^rolling\b/i.test(item.deadline_display.trim()) ||
+      /^closed\b/i.test(item.deadline_display.trim()) ||
+      /next call/i.test(item.deadline_display))
+      ? item.deadline_display
+      : "";
+
   const hasRealDeadline =
     Boolean(item.deadline) ||
     (deadline && deadline !== "Not specified" && !/^not specified$/i.test(deadline));
 
-  let dateLabel: "Deadline" | "Published" | "Posted" = "Deadline";
+  let dateLabel: "Deadline" | "Published" | "Posted" | "Status" = "Deadline";
   let dateDisplay = deadline;
   if (hasRealDeadline) {
     dateLabel = "Deadline";
     dateDisplay = deadline;
+  } else if (statusDisplay) {
+    // Prefer "Rolling / open" over scrape pubDate labeled as Published
+    dateLabel = "Status";
+    dateDisplay = statusDisplay;
   } else if (published) {
     dateLabel = item.posted ? "Posted" : "Published";
     dateDisplay = published;

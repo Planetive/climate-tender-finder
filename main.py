@@ -25,6 +25,7 @@ from services.opportunity_store import (
     list_opportunities,
     get_opportunity_by_id,
     count_by_source,
+    is_past_deadline,
 )
 from services.adb_enrichment import is_stale_posted
 from services.content_filter import (
@@ -113,12 +114,31 @@ def _filter_fresh_news(items: list) -> list:
 
 
 def _prepare_feed_items(items: list) -> list:
-    """Geo + ESG theme + fresh news + stale ADB filter, then refresh labels."""
+    """Geo + ESG theme + fresh news + drop expired deadlines, then refresh labels."""
     filtered = _filter_target_geo(items) if items else []
     filtered = _filter_esg_theme(filtered)
     filtered = _filter_fresh_news(filtered)
+    filtered = _filter_past_deadlines(filtered)
     filtered = _filter_stale_adb(filtered)
     return stamp_labels(filtered)
+
+
+def _filter_past_deadlines(items: list) -> list:
+    """
+    Hide grants/tenders whose deadline already passed.
+    Why: DB upsert never deletes old rows — UI was still showing Oct/Mar 2026 deadlines.
+    News items (no real deadline) are kept.
+    """
+    kept = []
+    for item in items:
+        kind = (item.get("content_kind") or "").lower()
+        if kind == "news":
+            kept.append(item)
+            continue
+        if is_past_deadline(item):
+            continue
+        kept.append(item)
+    return kept
 
 
 def _filter_stale_adb(items: list) -> list:

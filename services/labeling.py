@@ -62,6 +62,8 @@ def infer_opportunity_type(item: Dict[str, Any], content_kind: str) -> str:
     sid = (source.get("id") or "").lower() if isinstance(source, dict) else ""
     tender_sources = {
         "paktender",
+        "mytendernotice",
+        "ppra-epms",
         "ungm",
         "undp-pakistan-procurement",
         "gcf-negotiations",

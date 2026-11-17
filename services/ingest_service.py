@@ -26,6 +26,7 @@ from services.adb_enrichment import is_stale_posted
 from services.labeling import stamp_labels
 from services.opportunity_store import (
     delete_old_news,
+    delete_past_deadline_opportunities,
     delete_stale_adb_opportunities,
     upsert_opportunities,
 )
@@ -285,11 +286,16 @@ async def run_full_ingest(trigger: str = "manual") -> Dict[str, Any]:
             await set_cached_data(cache_key, all_items, ttl_minutes=60 * 12)
 
             written = await upsert_opportunities(all_items)
+            news_ids = news_source_ids()
             deleted = await delete_old_news(
-                news_source_ids=news_source_ids(),
+                news_source_ids=news_ids,
                 older_than_days=NEWS_RETENTION_DAYS,
             )
-            # Remove ADB rows already in DB that are old/expired (upsert never deletes)
+            # Remove ANY opportunity whose deadline already passed (upsert never deletes)
+            past_deadline_deleted = await delete_past_deadline_opportunities(
+                exclude_source_ids=news_ids
+            )
+            # Extra ADB cleanup: old posted notices with no usable deadline
             adb_max_age = {
                 f["id"]: int(f.get("max_posted_age_days") or 365)
                 for f in all_config["feeds"]
@@ -309,6 +315,7 @@ async def run_full_ingest(trigger: str = "manual") -> Dict[str, Any]:
                 "items": len(all_items),
                 "upserted": written,
                 "news_deleted": deleted,
+                "past_deadline_deleted": past_deadline_deleted,
                 "stale_adb_deleted": stale_deleted,
                 "sources_run": len(enabled_feeds),
                 "sources_ok": sources_ok,
@@ -327,7 +334,8 @@ async def run_full_ingest(trigger: str = "manual") -> Dict[str, Any]:
             print(
                 f"✓ Ingest done ({trigger}): {len(all_items)} items, "
                 f"upserted={written}, errors={sources_error}, "
-                f"news_deleted={deleted}, stale_adb_deleted={stale_deleted}"
+                f"news_deleted={deleted}, past_deadline_deleted={past_deadline_deleted}, "
+                f"stale_adb_deleted={stale_deleted}"
             )
             return _last_run
         except Exception as e:

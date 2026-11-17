@@ -86,7 +86,12 @@ def source_category(feed: Dict[str, Any]) -> str:
         return "News & Updates"
 
     # Opportunities
-    if "paktender" in sid or "secp" in sid:
+    if (
+        "paktender" in sid
+        or "mytendernotice" in sid
+        or "ppra-epms" in sid
+        or "secp" in sid
+    ):
         return "Pakistan Procurement"
     if "isdb" in sid:
         return "IsDB Procurement"
