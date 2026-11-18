@@ -44,11 +44,14 @@ const Index = () => {
   const today = new Date();
   const sevenDaysAgo = subDays(today, 7);
 
-  // Grants/tenders only for opportunity KPIs (news is separate retention)
+  // Grants/tenders/accelerators only (news is separate)
   const grantTenders = opportunities.filter((o) => o.contentKind !== "news");
 
-  // "New" = published/posted in the last 7 days (NOT deadline — that was the 50 bug)
-  const newOpportunities = grantTenders.filter((o) => {
+  // Active = everything currently open in the tracker (matches what users see listed)
+  const activeOpportunities = grantTenders.length;
+
+  // New this week = published/posted in the last 7 days
+  const newThisWeek = grantTenders.filter((o) => {
     const pub = o.publishedDate;
     if (!pub || pub.getTime() <= 0) return false;
     return isAfter(pub, sevenDaysAgo) && !isAfter(pub, today);
@@ -89,10 +92,14 @@ const Index = () => {
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <StatCard
-            title="New Opportunities"
-            value={loading ? "—" : newOpportunities}
+            title="Active Opportunities"
+            value={loading ? "—" : activeOpportunities}
             icon={FileSearch}
-            trend="Posted in last 7 days"
+            trend={
+              loading
+                ? "Open grants, tenders & programs"
+                : `${newThisWeek} new in last 7 days`
+            }
           />
           <StatCard
             title="High Relevance"

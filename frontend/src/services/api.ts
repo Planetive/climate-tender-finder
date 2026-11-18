@@ -104,7 +104,7 @@ export interface Opportunity {
   /** Parsed published/posted date for KPI math (invalid → epoch) */
   publishedDate: Date;
   /** What the list/detail date field means */
-  dateLabel: "Deadline" | "Published" | "Posted";
+  dateLabel: "Deadline" | "Published" | "Posted" | "Status";
   /** Best date to show the user (deadline if present, else published) */
   dateDisplay: string;
   fundingAgency: string;
